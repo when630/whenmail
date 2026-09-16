@@ -114,11 +114,11 @@ export default function App(): React.JSX.Element {
   return (
     <div className="app">
       <aside className={`rail ${expanded ? 'expanded' : ''}`}>
-        <div className="logo-row" title="whenimail">
+        <div className="logo-row" title="whenmail">
           <span className="logo-mark">
             <Send size={15} color="#fff" strokeWidth={2.2} />
           </span>
-          <span className="rail-label logo-name">whenimail</span>
+          <span className="rail-label logo-name">whenmail</span>
         </div>
         <button
           className="rail-item rail-search"
@@ -171,7 +171,7 @@ export default function App(): React.JSX.Element {
               {outlookMode ? MODE_LABEL[outlookMode] : '연동 확인 중…'}
             </span>
           </div>
-          <div className="rail-version rail-label">whenimail {version && `v${version}`}</div>
+          <div className="rail-version rail-label">whenmail {version && `v${version}`}</div>
         </div>
       </aside>
       <main className="content">

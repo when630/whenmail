@@ -1,4 +1,4 @@
-import type { WhenimailApi } from '../../shared/api'
+import type { WhenmailApi } from '../../shared/api'
 import type { AppSettings, Contact, DraftLog, EmailTemplate } from '../../shared/types'
 
 /**
@@ -66,9 +66,9 @@ export function installMockApiIfNeeded(): void {
     {
       id: 1,
       name: '첫 인사 메일',
-      subject_tpl: '[{{회사|whenimail}}] {{이름}}님, 반갑습니다',
+      subject_tpl: '[{{회사|whenmail}}] {{이름}}님, 반갑습니다',
       body_tpl:
-        '{{이름|고객}}님, 안녕하세요.\n\n지난 미팅에서 인사드린 whenimail입니다.\n{{회사|귀사}}의 {{직함|담당자}}님께 도움이 될 자료를 보내드립니다.\n\n감사합니다.',
+        '{{이름|고객}}님, 안녕하세요.\n\n지난 미팅에서 인사드린 whenmail입니다.\n{{회사|귀사}}의 {{직함|담당자}}님께 도움이 될 자료를 보내드립니다.\n\n감사합니다.',
       attachments: [{ name: '회사소개서.pdf', path: '/mock/att/회사소개서.pdf', size: 1843200 }],
       last_used_at: now,
       created_at: now,
@@ -91,15 +91,15 @@ export function installMockApiIfNeeded(): void {
 
   let settings: AppSettings = {
     outlookMode: 'auto',
-    signatureHtml: '<p>홍길동 | whenimail</p>',
+    signatureHtml: '<p>홍길동 | whenmail</p>',
     signatureEnabled: true,
-    defaultCc: 'team@whenimail.example',
+    defaultCc: 'team@whenmail.example',
     defaultCcEnabled: true,
     defaultBcc: '',
     defaultBccEnabled: false
   }
 
-  const api: WhenimailApi = {
+  const api: WhenmailApi = {
     tags: {
       list: async () => [
         { name: '전시회', count: 1 },
@@ -200,7 +200,7 @@ export function installMockApiIfNeeded(): void {
       onState: () => () => undefined
     },
     backup: {
-      export: async () => 'C:/mock/whenimail-backup.zip',
+      export: async () => 'C:/mock/whenmail-backup.zip',
       import: async () => false
     }
   }

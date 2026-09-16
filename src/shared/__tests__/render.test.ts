@@ -92,21 +92,21 @@ describe('bodyToHtmlFragment', () => {
     expect(html).toContain('<p>안녕하세요</p>')
     expect(html).toContain('<p>&nbsp;</p>')
     expect(html).toContain('<p>감사합니다</p>')
-    expect(html).not.toContain('whenimail-signature')
+    expect(html).not.toContain('whenmail-signature')
     expect(html.startsWith('<div style=')).toBe(true)
   })
 
   it('서명은 본문 뒤에 붙는다', () => {
     const html = bodyToHtmlFragment('<p>본문</p>', '<p>홍길동</p>')
     const body = html.indexOf('본문')
-    const sig = html.indexOf('whenimail-signature')
+    const sig = html.indexOf('whenmail-signature')
     expect(body).toBeGreaterThan(-1)
     expect(sig).toBeGreaterThan(body)
     expect(html).toContain('<p>홍길동</p>')
   })
 
   it('공백만 있는 서명은 무시한다', () => {
-    expect(bodyToHtmlFragment('x', '   ')).not.toContain('whenimail-signature')
+    expect(bodyToHtmlFragment('x', '   ')).not.toContain('whenmail-signature')
   })
 
   it('bodyToHtml은 조각을 html/body로 감싼다', () => {

@@ -144,7 +144,7 @@ async function openViaEml(p: DraftPayload): Promise<void> {
   headers.push(
     `Subject: ${encodedWord(p.subject)}`,
     'X-Unsent: 1',
-    `Message-ID: <${randomUUID()}@whenimail.local>`,
+    `Message-ID: <${randomUUID()}@whenmail.local>`,
     `Date: ${new Date().toUTCString()}`,
     'MIME-Version: 1.0'
   )
@@ -160,7 +160,7 @@ async function openViaEml(p: DraftPayload): Promise<void> {
       ''
     ]
   } else {
-    const boundary = `----=_whenimail_${randomUUID().replace(/-/g, '')}`
+    const boundary = `----=_whenmail_${randomUUID().replace(/-/g, '')}`
     body = [
       `Content-Type: multipart/mixed; boundary="${boundary}"`,
       '',
@@ -191,7 +191,7 @@ async function openViaEml(p: DraftPayload): Promise<void> {
 
   const eml = [...headers, ...body].join('\n')
 
-  const dir = path.join(app.getPath('temp'), 'whenimail')
+  const dir = path.join(app.getPath('temp'), 'whenmail')
   await fs.mkdir(dir, { recursive: true })
   const file = path.join(dir, `draft-${Date.now()}-${randomUUID().slice(0, 8)}.eml`)
   await fs.writeFile(file, eml, 'utf8')

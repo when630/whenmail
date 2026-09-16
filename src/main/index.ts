@@ -4,6 +4,7 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { registerIpcHandlers } from './ipc'
 import { initUpdater } from './updater'
+import { migrateLegacyData } from './migrate'
 
 function createWindow(): void {
   // Create the browser window.
@@ -12,7 +13,7 @@ function createWindow(): void {
     height: 800,
     minWidth: 900,
     minHeight: 600,
-    title: 'whenimail',
+    title: 'whenmail',
     show: false,
     autoHideMenuBar: true,
     ...(process.platform === 'linux' ? { icon } : {}),
@@ -54,6 +55,7 @@ app.whenReady().then(() => {
     optimizer.watchWindowShortcuts(window)
   })
 
+  migrateLegacyData()
   registerIpcHandlers()
   initUpdater()
 

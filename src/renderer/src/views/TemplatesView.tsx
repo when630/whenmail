@@ -188,7 +188,7 @@ export default function TemplatesView(): React.JSX.Element {
               <span>제목</span>
               <input
                 value={form.subject_tpl}
-                placeholder="예: [{{회사|whenimail}}] {{이름}}님, 안녕하세요"
+                placeholder="예: [{{회사|whenmail}}] {{이름}}님, 안녕하세요"
                 onChange={(e) => set('subject_tpl', e.target.value)}
               />
             </label>

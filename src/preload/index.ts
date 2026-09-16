@@ -19,9 +19,9 @@ import type {
   TemplateInput,
   UpdateState
 } from '../shared/types'
-import type { WhenimailApi } from '../shared/api'
+import type { WhenmailApi } from '../shared/api'
 
-const api: WhenimailApi = {
+const api: WhenmailApi = {
   tags: {
     list: (): Promise<TagCount[]> => ipcRenderer.invoke('tags:list')
   },

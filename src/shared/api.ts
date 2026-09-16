@@ -19,7 +19,7 @@ import type {
 } from './types'
 
 /** preload가 렌더러에 노출하는 window.api 계약 */
-export interface WhenimailApi {
+export interface WhenmailApi {
   contacts: {
     list: (search?: string, tag?: string) => Promise<Contact[]>
     recent: (limit?: number) => Promise<Contact[]>

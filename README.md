@@ -1,4 +1,4 @@
-# whenimail
+# whenmail
 
 명함을 저장하고, 이메일 템플릿에 명함 정보를 치환해 **Outlook 새 메일 초안**으로 열어주는 개인용 데스크톱 앱.
 
@@ -30,7 +30,7 @@ npm run build:win  # Windows 설치본 빌드
 npm run build && npx electron-builder --win --publish never
 # 3. 태그 + 릴리즈 (setup.exe / latest.yml / blockmap 필수)
 git tag vX.Y.Z && git push origin vX.Y.Z
-gh release create vX.Y.Z dist/whenimail-X.Y.Z-setup.exe dist/latest.yml dist/whenimail-X.Y.Z-setup.exe.blockmap --title "whenimail vX.Y.Z" --notes "..."
+gh release create vX.Y.Z dist/whenmail-X.Y.Z-setup.exe dist/latest.yml dist/whenmail-X.Y.Z-setup.exe.blockmap --title "whenmail vX.Y.Z" --notes "..."
 ```
 
 `latest.yml`이 빠지면 설치된 앱이 새 버전을 감지하지 못한다.

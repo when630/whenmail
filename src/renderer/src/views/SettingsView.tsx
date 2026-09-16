@@ -262,7 +262,7 @@ export default function SettingsView({
           </p>
         )}
         <p className="muted">
-          whenimail은 메일을 자동 전송하지 않습니다. 항상 Outlook 초안을 열어 확인 후 직접
+          whenmail은 메일을 자동 전송하지 않습니다. 항상 Outlook 초안을 열어 확인 후 직접
           전송합니다.
         </p>
       </section>

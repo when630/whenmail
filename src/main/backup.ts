@@ -3,15 +3,14 @@ import fs from 'node:fs'
 import path from 'node:path'
 import AdmZip from 'adm-zip'
 import { closeDb, getDb } from './db'
-
-const DB_FILE = 'whenimail.db'
+import { DB_FILE, LEGACY_DB_FILE, renameLegacyDb } from './migrate'
 
 /** DB + 명함 이미지를 zip으로 내보낸다. 취소 시 null, 성공 시 저장 경로 */
 export async function exportBackup(): Promise<string | null> {
   const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '')
   const { canceled, filePath } = await dialog.showSaveDialog({
     title: '백업 내보내기',
-    defaultPath: `whenimail-backup-${stamp}.zip`,
+    defaultPath: `whenmail-backup-${stamp}.zip`,
     filters: [{ name: 'ZIP', extensions: ['zip'] }]
   })
   if (canceled || !filePath) return null
@@ -44,8 +43,9 @@ export async function importBackup(): Promise<boolean> {
 
   const zip = new AdmZip(filePaths[0])
   const entries = zip.getEntries()
-  if (!entries.some((e) => e.entryName === DB_FILE)) {
-    throw new Error('whenimail 백업 파일이 아닙니다 (whenimail.db 없음)')
+  // 개명 이전(whenimail) 백업도 복원 가능
+  if (!entries.some((e) => e.entryName === DB_FILE || e.entryName === LEGACY_DB_FILE)) {
+    throw new Error('whenmail 백업 파일이 아닙니다 (whenmail.db 없음)')
   }
   // zip slip 방지
   if (entries.some((e) => e.entryName.includes('..') || path.isAbsolute(e.entryName))) {
@@ -58,6 +58,11 @@ export async function importBackup(): Promise<boolean> {
     fs.rmSync(path.join(dir, DB_FILE + suffix), { force: true })
   }
   zip.extractAllTo(dir, true)
+  // 구버전 백업이면 whenimail.db → whenmail.db (기존 whenmail.db는 zip 추출로 덮어써졌거나 없음)
+  if (!entries.some((e) => e.entryName === DB_FILE)) {
+    fs.rmSync(path.join(dir, DB_FILE), { force: true })
+    renameLegacyDb(dir)
+  }
 
   app.relaunch()
   app.exit(0)

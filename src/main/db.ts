@@ -2,6 +2,7 @@ import { app } from 'electron'
 import path from 'node:path'
 import fs from 'node:fs'
 import Database from 'better-sqlite3'
+import { DB_FILE } from './migrate'
 
 let db: Database.Database | null = null
 
@@ -17,7 +18,7 @@ export function getDb(): Database.Database {
   if (db) return db
   const dir = app.getPath('userData')
   fs.mkdirSync(dir, { recursive: true })
-  db = new Database(path.join(dir, 'whenimail.db'))
+  db = new Database(path.join(dir, DB_FILE))
   db.pragma('journal_mode = WAL')
   db.pragma('foreign_keys = ON')
   migrate(db)

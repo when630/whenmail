@@ -90,7 +90,7 @@ export function bodyToHtmlFragment(body: string, signatureHtml = ''): string {
         .map((line) => (line.trim() === '' ? '<p>&nbsp;</p>' : `<p>${line}</p>`))
         .join('\n')
   const signature = signatureHtml.trim()
-    ? `<p>&nbsp;</p><div class="whenimail-signature">${signatureHtml}</div>`
+    ? `<p>&nbsp;</p><div class="whenmail-signature">${signatureHtml}</div>`
     : ''
   return `<div style="${BODY_STYLE}">${content}${signature}</div>`
 }

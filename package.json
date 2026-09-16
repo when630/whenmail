@@ -1,5 +1,5 @@
 {
-  "name": "whenimail",
+  "name": "whenmail",
   "version": "0.4.1",
   "description": "명함 저장 + 이메일 템플릿 치환 + Outlook 초안 열기 데스크톱 앱",
   "main": "./out/main/index.js",

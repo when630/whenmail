@@ -1,5 +1,5 @@
 appId: com.when630.whenimail
-productName: whenimail
+productName: whenmail
 directories:
   buildResources: build
 files:
@@ -15,7 +15,7 @@ asarUnpack:
   - 'node_modules/tesseract.js/**'
   - 'node_modules/tesseract.js-core/**'
 win:
-  executableName: whenimail
+  executableName: whenmail
 nsis:
   artifactName: ${name}-${version}-setup.${ext}
   shortcutName: ${productName}
@@ -44,4 +44,4 @@ npmRebuild: false
 publish:
   provider: github
   owner: when630
-  repo: whenimail
+  repo: whenmail
