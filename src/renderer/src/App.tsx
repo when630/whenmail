@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   Activity as ActivityIcon,
+  Bell,
   Building2,
   Mail,
   PanelLeftClose,
@@ -10,10 +11,11 @@ import {
   Settings,
   Users
 } from 'lucide-react'
-import type { Account, Person } from '../../shared/types'
+import type { Account, AppNotification, Person } from '../../shared/types'
 import { ACCOUNT_KIND_LABEL } from '../../shared/accounts'
 import { useDialog } from './components/dialogs'
 import CommandPalette, { type ViewKey } from './components/CommandPalette'
+import NotificationPanel from './components/NotificationPanel'
 import ComposeModal from './views/ComposeModal'
 import PeopleView from './views/PeopleView'
 import CompaniesView from './views/CompaniesView'
@@ -52,9 +54,8 @@ function accountStatus(accounts: Account[] | null): { text: string; tone: string
   if (accounts === null) return { text: '계정 확인 중…', tone: 'unknown' }
   const def = accounts.find((a) => a.is_default) ?? accounts[0]
   if (!def) return { text: '계정 없음 — 설정에서 추가', tone: 'mailto' }
-  const kind = ACCOUNT_KIND_LABEL[def.kind]
   return {
-    text: `${def.display_name} · ${kind}`,
+    text: `${def.display_name} · ${ACCOUNT_KIND_LABEL[def.kind]}`,
     tone: def.connected ? 'com' : 'eml'
   }
 }
@@ -64,6 +65,10 @@ export default function App(): React.JSX.Element {
   const [accounts, setAccounts] = useState<Account[] | null>(null)
   const [expanded, setExpanded] = useState(initialExpanded)
   const [version, setVersion] = useState('')
+  const [unread, setUnread] = useState(0)
+  const [notifyOpen, setNotifyOpen] = useState(
+    () => typeof window !== 'undefined' && window.location.search.includes('notify=1')
+  )
   const [paletteOpen, setPaletteOpen] = useState(
     () => typeof window !== 'undefined' && window.location.search.includes('palette=1')
   )
@@ -73,6 +78,8 @@ export default function App(): React.JSX.Element {
   } | null>(null)
   const [newPersonSignal, setNewPersonSignal] = useState(0)
   const [importSignal, setImportSignal] = useState(0)
+  /** 알림에서 사람을 열 때 — 같은 사람을 다시 눌러도 열리도록 순번을 함께 올린다 */
+  const [openPerson, setOpenPerson] = useState<{ id: number; n: number } | null>(null)
   /** 회사 화면에서 "사람 보기"로 넘어올 때의 회사 필터 */
   const [peopleOrgFilter, setPeopleOrgFilter] = useState<{ id: number; name: string } | null>(null)
   const { toast } = useDialog()
@@ -81,6 +88,7 @@ export default function App(): React.JSX.Element {
   useEffect(() => {
     window.api.accounts.list().then(setAccounts)
     window.api.system.version().then(setVersion)
+    window.api.notifications.unreadCount().then(setUnread)
   }, [])
 
   useEffect(() => {
@@ -91,6 +99,15 @@ export default function App(): React.JSX.Element {
       }
     })
   }, [toast])
+
+  // 백그라운드 동기화가 끝나면 알림 배지를 갱신한다
+  useEffect(() => {
+    return window.api.sync.onState((s) => {
+      if (s.phase === 'done' || s.phase === 'error') {
+        window.api.notifications.unreadCount().then(setUnread)
+      }
+    })
+  }, [])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
@@ -129,6 +146,12 @@ export default function App(): React.JSX.Element {
     setView('people')
   }, [])
 
+  const showPerson = useCallback((id: number) => {
+    setPeopleOrgFilter(null)
+    setOpenPerson((prev) => ({ id, n: (prev?.n ?? 0) + 1 }))
+    setView('people')
+  }, [])
+
   const navigate = (key: ViewKey): void => {
     if (key === 'people') setPeopleOrgFilter(null)
     setView(key)
@@ -136,6 +159,7 @@ export default function App(): React.JSX.Element {
 
   const tip = (label: string): { 'data-tip'?: string } => (expanded ? {} : { 'data-tip': label })
   const status = accountStatus(accounts)
+  const notifyLabel = unread > 0 ? `알림 ${unread}건` : '알림함'
 
   return (
     <div className="app">
@@ -156,6 +180,18 @@ export default function App(): React.JSX.Element {
           <span className="rail-label">
             검색·실행 <kbd className="rail-kbd">Ctrl K</kbd>
           </span>
+        </button>
+        <button
+          className={`rail-item rail-notify ${unread > 0 ? 'has-unread' : ''}`}
+          {...tip(notifyLabel)}
+          aria-label={notifyLabel}
+          onClick={() => setNotifyOpen(true)}
+        >
+          <span className="rail-bell">
+            <Bell size={18} strokeWidth={1.9} />
+            {unread > 0 && <span className="rail-badge">{unread > 99 ? '99+' : unread}</span>}
+          </span>
+          <span className="rail-label">알림함</span>
         </button>
         <nav className="rail-nav">
           {NAV.map(({ key, label, Icon }) => (
@@ -204,6 +240,7 @@ export default function App(): React.JSX.Element {
             <PeopleView
               newPersonSignal={newPersonSignal}
               importSignal={importSignal}
+              openPerson={openPerson}
               organizationFilter={peopleOrgFilter}
               onClearOrganizationFilter={() => setPeopleOrgFilter(null)}
             />
@@ -215,6 +252,18 @@ export default function App(): React.JSX.Element {
         </div>
       </main>
 
+      {notifyOpen && (
+        <NotificationPanel
+          onChanged={(list: AppNotification[]) =>
+            setUnread(list.filter((n) => n.status === 'unread').length)
+          }
+          onOpenPerson={showPerson}
+          onClose={() => {
+            setNotifyOpen(false)
+            window.api.notifications.unreadCount().then(setUnread)
+          }}
+        />
+      )}
       {paletteOpen && (
         <CommandPalette
           onClose={() => setPaletteOpen(false)}

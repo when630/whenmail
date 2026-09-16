@@ -72,6 +72,11 @@ export function capabilitiesOf(
   }
 }
 
+/** 이 종류가 메일 읽기를 지원하는지 (로컬 Outlook은 COM 읽기를 지원하지 않는다) */
+export function canReadKind(kind: AccountKind): boolean {
+  return kind === 'm365' || kind === 'gmail' || kind === 'imap'
+}
+
 /** 초안 생성 버튼 문구 */
 export function draftButtonLabel(kind: AccountKind): string {
   switch (kind) {

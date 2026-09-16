@@ -5,8 +5,10 @@ import type Database from 'better-sqlite3'
  * 스키마 버전 관리.
  *  v1: contact(명함 1장 = 연락처 1건, 이메일 1개) · template · draft_log · tag · contact_tag · setting
  *  v2: person / email_address(1:N) / organization / business_card(1:N) / person_tag / activity
+ *  v3: account(발신 프로필) · activity.account_id
+ *  v4: mail_index(헤더만) · notification(알림함) · person 연락 시각 캐시
  */
-export const SCHEMA_VERSION = 3
+export const SCHEMA_VERSION = 4
 
 function tableExists(db: Database.Database, name: string): boolean {
   return Boolean(
@@ -63,6 +65,71 @@ export function migrateDatabase(db: Database.Database, file: string): void {
     })()
     version = 3
   }
+  if (version < 4) {
+    db.transaction(() => {
+      migrateV3toV4(db)
+      writeVersion(db, 4)
+    })()
+    version = 4
+  }
+}
+
+/**
+ * v4: 메일 헤더 인덱스와 알림함.
+ * mail_index는 등록된 사람의 주소와 오간 메일의 헤더만 담는다(본문·첨부는 저장하지 않음).
+ * notification은 앱을 켰을 때 확인하는 알림함 — 상주하지 않으므로 OS 알림 대신 여기에 쌓는다.
+ */
+const V4_TABLES = `
+  CREATE TABLE IF NOT EXISTS mail_index (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id INTEGER NOT NULL REFERENCES account(id) ON DELETE CASCADE,
+    person_id INTEGER REFERENCES person(id) ON DELETE CASCADE,
+    email_address_id INTEGER REFERENCES email_address(id) ON DELETE SET NULL,
+    message_id TEXT NOT NULL,
+    thread_id TEXT NOT NULL DEFAULT '',
+    direction TEXT NOT NULL,
+    counterpart TEXT NOT NULL DEFAULT '',
+    subject TEXT NOT NULL DEFAULT '',
+    occurred_at TEXT NOT NULL,
+    open_ref TEXT NOT NULL DEFAULT '',
+    UNIQUE (account_id, message_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_mail_person ON mail_index(person_id, occurred_at);
+  CREATE INDEX IF NOT EXISTS idx_mail_account ON mail_index(account_id);
+
+  CREATE TABLE IF NOT EXISTS notification (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL,
+    person_id INTEGER REFERENCES person(id) ON DELETE CASCADE,
+    account_id INTEGER REFERENCES account(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    body TEXT NOT NULL DEFAULT '',
+    dedupe_key TEXT NOT NULL UNIQUE,
+    status TEXT NOT NULL DEFAULT 'unread',
+    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    resolved_at TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_notification_status ON notification(status, created_at);
+`
+
+function addPersonContactColumns(db: Database.Database): void {
+  if (!columnExists(db, 'person', 'last_inbound_at')) {
+    db.exec(`ALTER TABLE person ADD COLUMN last_inbound_at TEXT`)
+  }
+  if (!columnExists(db, 'person', 'last_outbound_at')) {
+    db.exec(`ALTER TABLE person ADD COLUMN last_outbound_at TEXT`)
+  }
+}
+
+function migrateV3toV4(db: Database.Database): void {
+  db.exec(V4_TABLES)
+  addPersonContactColumns(db)
+  // 기존 초안 기록을 "내가 보낸 시각"의 근사치로 삼아 답장 대기 판정의 출발점을 만든다
+  db.exec(`
+    UPDATE person SET last_outbound_at = (
+      SELECT MAX(occurred_at) FROM activity a WHERE a.person_id = person.id AND a.kind = 'draft'
+    )
+  `)
 }
 
 /** v3: 계정(발신 프로필) 테이블. 초안 활동에 계정 연결 */
@@ -246,6 +313,8 @@ function createSchemaLatest(db: Database.Database): void {
   db.exec(
     `ALTER TABLE activity ADD COLUMN account_id INTEGER REFERENCES account(id) ON DELETE SET NULL`
   )
+  db.exec(V4_TABLES)
+  addPersonContactColumns(db)
 }
 
 /** 무료 메일 도메인 — 회사 도메인 자동 추출에서 제외 */

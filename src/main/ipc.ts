@@ -12,6 +12,7 @@ import type {
   DraftTarget,
   DuplicatePolicy,
   ExportFormat,
+  NotificationStatus,
   OrganizationInput,
   PersonFilter,
   PersonInput,
@@ -108,14 +109,13 @@ export function registerIpcHandlers(): void {
   ipcMain.handle('accounts:setDefault', (_e, id: number) => repo.setDefaultAccount(id))
   ipcMain.handle(
     'accounts:connectOAuth',
-    async (_e, kind: 'm365' | 'gmail', accountId?: number) => {
+    async (_e, kind: 'm365' | 'gmail', accountId?: number, withRead?: boolean) => {
       const client = repo.oauthClientFor(kind)
       if (accountId) {
-        const result = await connectOAuth(kind, client, secretKeys.oauth(accountId))
-        return result
+        return connectOAuth(kind, client, secretKeys.oauth(accountId), withRead)
       }
       const pendingKey = pendingOAuthKey()
-      const result = await connectOAuth(kind, client, pendingKey)
+      const result = await connectOAuth(kind, client, pendingKey, withRead)
       return { ...result, pendingKey }
     }
   )
@@ -162,6 +162,22 @@ export function registerIpcHandlers(): void {
       }
     }
   })
+
+  // 메일 인덱스 · 알림함
+  ipcMain.handle('mail:list', (_e, personId: number, limit?: number) =>
+    repo.listMail(personId, limit)
+  )
+  ipcMain.handle('notifications:list', (_e, includeDone?: boolean) =>
+    repo.listNotifications(includeDone)
+  )
+  ipcMain.handle('notifications:unreadCount', () => repo.unreadNotificationCount())
+  ipcMain.handle('notifications:setStatus', (_e, id: number, status: NotificationStatus) =>
+    repo.setNotificationStatus(id, status)
+  )
+  ipcMain.handle('notifications:markAllRead', () => repo.markAllNotificationsRead())
+  ipcMain.handle('notifications:clear', (_e, onlyDone?: boolean) =>
+    repo.clearNotifications(onlyDone !== false)
+  )
 
   ipcMain.handle('tags:list', () => repo.listTags())
 

@@ -8,11 +8,18 @@ import {
   secretKeys,
   setSecret
 } from './credentials'
+import { canReadKind } from './readers'
+import { tokenCanRead } from './oauth'
 import type {
   Account,
   AccountConfig,
   AccountInput,
   Activity,
+  AppNotification,
+  MailEntry,
+  MailHeader,
+  NotificationKind,
+  NotificationStatus,
   AppSettings,
   BulkPersonPatch,
   BusinessCard,
@@ -44,7 +51,7 @@ const PERSON_FIELDS = [
   'memo'
 ] as const
 
-type PersonRow = Omit<Person, 'email' | 'emails' | 'cards' | 'tags'>
+type PersonRow = Omit<Person, 'email' | 'emails' | 'cards' | 'tags' | 'awaiting_reply'>
 
 function normalizeText(v: unknown): string {
   return String(v ?? '').trim()
@@ -219,6 +226,7 @@ function hydrate(rows: PersonRow[]): Person[] {
     tagMap.set(t.person_id, arr)
   }
 
+  const cutoff = awaitingCutoff()
   return rows.map((r) => {
     const list = emailMap.get(r.id) ?? []
     return {
@@ -226,10 +234,32 @@ function hydrate(rows: PersonRow[]): Person[] {
       emails: list,
       email: list.find((e) => e.is_primary)?.address ?? list[0]?.address ?? '',
       cards: cardMap.get(r.id) ?? [],
-      tags: tagMap.get(r.id) ?? []
+      tags: tagMap.get(r.id) ?? [],
+      awaiting_reply: isAwaiting(r.last_outbound_at, r.last_inbound_at, cutoff)
     }
   })
 }
+
+/** 답장 대기 판정 기준 시각 — 이보다 전에 보냈는데 그 뒤 회신이 없으면 대기 */
+function awaitingCutoff(): string {
+  const days = getSettings().awaitingReplyDays
+  const d = new Date(Date.now() - days * 86400_000)
+  const pad = (n: number): string => String(n).padStart(2, '0')
+  return (
+    `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ` +
+    `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+  )
+}
+
+function isAwaiting(lastOut: string | null, lastIn: string | null, cutoff: string): boolean {
+  if (!lastOut) return false
+  if (lastOut > cutoff) return false
+  return !lastIn || lastIn < lastOut
+}
+
+/** 답장 대기 조건을 SQL로 (목록 필터용) */
+const AWAITING_SQL = `p.last_outbound_at IS NOT NULL AND p.last_outbound_at <= @cutoff
+  AND (p.last_inbound_at IS NULL OR p.last_inbound_at < p.last_outbound_at)`
 
 export function listPeople(filter: PersonFilter = {}): Person[] {
   const db = getDb()
@@ -253,6 +283,10 @@ export function listPeople(filter: PersonFilter = {}): Person[] {
   if (filter.organizationId) {
     where.push('p.organization_id = ?')
     params.push(filter.organizationId)
+  }
+  if (filter.awaitingReply) {
+    where.push(AWAITING_SQL.replace(/@cutoff/g, '?'))
+    params.push(awaitingCutoff())
   }
   const sql = `${PERSON_SELECT} ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY p.name`
   return hydrate(db.prepare(sql).all(...params) as PersonRow[])
@@ -332,6 +366,7 @@ export function createPerson(input: PersonInput): Person {
     return id
   })
   const id = run()
+  relinkMail(id)
   return getPerson(id)!
 }
 
@@ -349,6 +384,7 @@ export function updatePerson(id: number, input: PersonInput): Person {
     saveCards(id, String(row.name), input)
     pruneOrganizations()
   })()
+  relinkMail(id)
   const person = getPerson(id)
   if (!person) throw new Error('사람을 찾을 수 없습니다')
   return person
@@ -601,14 +637,22 @@ export function mergePeople(targetId: number, sourceIds: number[]): Person {
       targetId,
       ...sources
     )
+    // mail_index·notification은 person을 ON DELETE CASCADE로 참조하므로
+    // 원본 사람을 지우기 전에 옮겨야 기록이 사라지지 않는다
+    db.prepare(`UPDATE mail_index SET person_id = ? WHERE person_id IN (${ph})`).run(
+      targetId,
+      ...sources
+    )
+    db.prepare(`UPDATE notification SET person_id = ? WHERE person_id IN (${ph})`).run(
+      targetId,
+      ...sources
+    )
     db.prepare(`DELETE FROM person WHERE id IN (${ph})`).run(...sources)
 
-    db.prepare(
-      `UPDATE person SET
-         last_contact_at = (SELECT MAX(occurred_at) FROM activity a WHERE a.person_id = ? AND a.kind = 'draft'),
-         updated_at = datetime('now','localtime')
-       WHERE id = ?`
-    ).run(targetId, targetId)
+    refreshContactTimes(targetId)
+    db.prepare(`UPDATE person SET updated_at = datetime('now','localtime') WHERE id = ?`).run(
+      targetId
+    )
 
     insertActivity({
       personId: targetId,
@@ -655,9 +699,10 @@ export function insertActivity(entry: {
       entry.adapter ?? ''
     )
   if (entry.kind === 'draft' && entry.personId) {
-    db.prepare(`UPDATE person SET last_contact_at = datetime('now','localtime') WHERE id = ?`).run(
-      entry.personId
-    )
+    db.prepare(
+      `UPDATE person SET last_contact_at = datetime('now','localtime'),
+         last_outbound_at = datetime('now','localtime') WHERE id = ?`
+    ).run(entry.personId)
   }
   return db
     .prepare('SELECT * FROM activity WHERE id = ?')
@@ -817,6 +862,12 @@ function rowToAccount(r: AccountRow): Account {
       : r.kind === 'imap'
         ? hasSecret(secretKeys.imap(r.id))
         : hasSecret(secretKeys.oauth(r.id))
+  const canRead =
+    !canReadKind(r.kind) || !connected
+      ? false
+      : r.kind === 'imap'
+        ? true
+        : tokenCanRead(r.kind as 'm365' | 'gmail', r.id)
   return {
     id: r.id,
     kind: r.kind,
@@ -831,6 +882,7 @@ function rowToAccount(r: AccountRow): Account {
     is_default: Boolean(r.is_default),
     config: parseConfig(r.config_json),
     connected,
+    can_read: canRead,
     sync_enabled: Boolean(r.sync_enabled),
     last_sync_at: r.last_sync_at,
     last_sync_error: r.last_sync_error,
@@ -885,6 +937,8 @@ function accountValues(input: AccountInput): Record<string, string | number> {
     default_cc_enabled: input.default_cc_enabled === false ? 0 : 1,
     default_bcc: normalizeText(input.default_bcc),
     default_bcc_enabled: input.default_bcc_enabled === false ? 0 : 1,
+    // 읽기를 못 하는 종류는 동기화를 켤 수 없다
+    sync_enabled: input.sync_enabled && canReadKind(input.kind) ? 1 : 0,
     config_json: JSON.stringify(config)
   }
 }
@@ -959,9 +1013,251 @@ export function deleteAccount(id: number): void {
   deleteAccountSecrets(id)
 }
 
+/** 계정 동기화 결과 기록 */
+export function markAccountSynced(id: number, error = ''): void {
+  getDb()
+    .prepare(
+      `UPDATE account SET last_sync_at = datetime('now','localtime'), last_sync_error = ? WHERE id = ?`
+    )
+    .run(error, id)
+}
+
 export function setDefaultAccount(id: number): Account[] {
   getDb().prepare('UPDATE account SET is_default = CASE WHEN id = ? THEN 1 ELSE 0 END').run(id)
   return listAccounts()
+}
+
+/* ────────────────────────── 메일 인덱스 ────────────────────────── */
+
+/** 주소 → 사람 매핑 (동기화에서 받은 헤더를 사람에 붙일 때 쓴다) */
+export function addressOwners(): Map<string, { personId: number; emailId: number }> {
+  const rows = getDb().prepare('SELECT id, person_id, address FROM email_address').all() as {
+    id: number
+    person_id: number
+    address: string
+  }[]
+  return new Map(rows.map((r) => [r.address, { personId: r.person_id, emailId: r.id }]))
+}
+
+/** 동기화 대상 주소 — 등록된 사람의 모든 주소 (personId를 주면 그 사람만) */
+export function syncAddresses(personId?: number): string[] {
+  const db = getDb()
+  const rows = personId
+    ? (db
+        .prepare('SELECT address FROM email_address WHERE person_id = ? ORDER BY is_primary DESC')
+        .all(personId) as { address: string }[])
+    : (db.prepare('SELECT address FROM email_address ORDER BY address').all() as {
+        address: string
+      }[])
+  return rows.map((r) => r.address)
+}
+
+/** 헤더 저장 결과 — 새로 들어온 수와, 새 수신 메일이 생긴 사람들 */
+export interface MailUpsertResult {
+  added: number
+  inbound: { personId: number; subject: string; messageId: string }[]
+}
+
+/** 헤더를 저장한다. 이미 있는 메시지는 건너뛴다 */
+export function upsertMailHeaders(accountId: number, headers: MailHeader[]): MailUpsertResult {
+  if (headers.length === 0) return { added: 0, inbound: [] }
+  const db = getDb()
+  const owners = addressOwners()
+  const insert = db.prepare(
+    `INSERT OR IGNORE INTO mail_index
+       (account_id, person_id, email_address_id, message_id, thread_id, direction,
+        counterpart, subject, occurred_at, open_ref)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  )
+  const run = db.transaction((items: MailHeader[]): MailUpsertResult => {
+    const result: MailUpsertResult = { added: 0, inbound: [] }
+    for (const h of items) {
+      if (!h.messageId || !h.occurredAt) continue
+      const owner = owners.get(h.counterpart)
+      const info = insert.run(
+        accountId,
+        owner?.personId ?? null,
+        owner?.emailId ?? null,
+        h.messageId,
+        h.threadId,
+        h.direction,
+        h.counterpart,
+        h.subject,
+        h.occurredAt,
+        h.openRef
+      )
+      if (info.changes === 0) continue
+      result.added += 1
+      if (h.direction === 'in' && owner) {
+        result.inbound.push({
+          personId: owner.personId,
+          subject: h.subject,
+          messageId: h.messageId
+        })
+      }
+    }
+    return result
+  })
+  return run(headers)
+}
+
+/** 사람의 메일 왕래 (최신순) */
+export function listMail(personId: number, limit = 200): MailEntry[] {
+  return getDb()
+    .prepare(
+      `SELECT m.id, m.account_id AS accountId, COALESCE(a.display_name, '') AS accountName,
+              m.message_id AS messageId, m.thread_id AS threadId, m.direction,
+              m.counterpart, m.subject, m.occurred_at AS occurredAt, m.open_ref AS openRef
+       FROM mail_index m LEFT JOIN account a ON a.id = m.account_id
+       WHERE m.person_id = ? ORDER BY m.occurred_at DESC, m.id DESC LIMIT ?`
+    )
+    .all(personId, limit) as MailEntry[]
+}
+
+/**
+ * 메일 인덱스와 초안 기록으로 사람의 연락 시각 캐시를 다시 계산한다.
+ * personId를 주면 그 사람만, 없으면 전체.
+ */
+export function refreshContactTimes(personId?: number): void {
+  const db = getDb()
+  const where = personId ? 'WHERE person.id = @id' : ''
+  const params = personId ? { id: personId } : {}
+  db.prepare(
+    `UPDATE person SET
+       last_inbound_at = (
+         SELECT MAX(occurred_at) FROM mail_index m
+         WHERE m.person_id = person.id AND m.direction = 'in'),
+       last_outbound_at = NULLIF(MAX(
+         COALESCE((SELECT MAX(occurred_at) FROM mail_index m
+                   WHERE m.person_id = person.id AND m.direction = 'out'), ''),
+         COALESCE((SELECT MAX(occurred_at) FROM activity a
+                   WHERE a.person_id = person.id AND a.kind = 'draft'), '')
+       ), ''),
+       last_contact_at = NULLIF(MAX(
+         COALESCE((SELECT MAX(occurred_at) FROM mail_index m WHERE m.person_id = person.id), ''),
+         COALESCE((SELECT MAX(occurred_at) FROM activity a
+                   WHERE a.person_id = person.id AND a.kind = 'draft'), '')
+       ), '')
+     ${where}`
+  ).run(params)
+}
+
+/** 사람의 주소로 이미 받아둔 메일을 그 사람에게 연결한다 (사람 추가·이메일 변경 후) */
+export function relinkMail(personId: number): void {
+  getDb()
+    .prepare(
+      `UPDATE mail_index SET
+         person_id = (SELECT e.person_id FROM email_address e WHERE e.address = mail_index.counterpart),
+         email_address_id = (SELECT e.id FROM email_address e WHERE e.address = mail_index.counterpart)
+       WHERE counterpart IN (SELECT address FROM email_address WHERE person_id = ?)`
+    )
+    .run(personId)
+  refreshContactTimes(personId)
+}
+
+/* ────────────────────────── 알림함 ────────────────────────── */
+
+const NOTIFICATION_SELECT = `
+  SELECT n.id, n.kind, n.person_id, COALESCE(p.name, '') AS person_name, n.account_id,
+         n.title, n.body, n.status, n.created_at, n.resolved_at
+  FROM notification n LEFT JOIN person p ON p.id = n.person_id`
+
+export function listNotifications(includeDone = false, limit = 200): AppNotification[] {
+  const where = includeDone ? '' : `WHERE n.status <> 'done'`
+  return getDb()
+    .prepare(
+      `${NOTIFICATION_SELECT} ${where}
+       ORDER BY (n.status = 'unread') DESC, n.created_at DESC, n.id DESC LIMIT ?`
+    )
+    .all(limit) as AppNotification[]
+}
+
+export function unreadNotificationCount(): number {
+  return (
+    getDb().prepare(`SELECT COUNT(*) c FROM notification WHERE status = 'unread'`).get() as {
+      c: number
+    }
+  ).c
+}
+
+/** 같은 사건이 두 번 쌓이지 않게 dedupe_key로 막는다. 새로 만들어졌으면 true */
+export function pushNotification(entry: {
+  kind: NotificationKind
+  personId?: number | null
+  accountId?: number | null
+  title: string
+  body?: string
+  dedupeKey: string
+}): boolean {
+  const info = getDb()
+    .prepare(
+      `INSERT OR IGNORE INTO notification (kind, person_id, account_id, title, body, dedupe_key)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    )
+    .run(
+      entry.kind,
+      entry.personId ?? null,
+      entry.accountId ?? null,
+      entry.title,
+      entry.body ?? '',
+      entry.dedupeKey
+    )
+  return info.changes > 0
+}
+
+export function setNotificationStatus(id: number, status: NotificationStatus): AppNotification[] {
+  getDb()
+    .prepare(
+      `UPDATE notification SET status = ?,
+         resolved_at = CASE WHEN ? = 'done' THEN datetime('now','localtime') ELSE resolved_at END
+       WHERE id = ?`
+    )
+    .run(status, status, id)
+  return listNotifications()
+}
+
+export function markAllNotificationsRead(): AppNotification[] {
+  getDb().prepare(`UPDATE notification SET status = 'read' WHERE status = 'unread'`).run()
+  return listNotifications()
+}
+
+/** 처리 완료한 알림을 지운다 (onlyDone=false면 전부) */
+export function clearNotifications(onlyDone = true): AppNotification[] {
+  getDb()
+    .prepare(
+      onlyDone ? `DELETE FROM notification WHERE status = 'done'` : 'DELETE FROM notification'
+    )
+    .run()
+  return listNotifications()
+}
+
+/** 아직 열려 있는 답장 대기 알림이 붙은 사람들 */
+export function openAwaitingPersonIds(): Set<number> {
+  const rows = getDb()
+    .prepare(
+      `SELECT DISTINCT person_id FROM notification
+       WHERE kind = 'awaiting_reply' AND status <> 'done' AND person_id IS NOT NULL`
+    )
+    .all() as { person_id: number }[]
+  return new Set(rows.map((r) => r.person_id))
+}
+
+/** 회신이 도착한 사람의 대기 알림을 자동으로 닫는다 */
+export function closeAwaitingFor(personId: number): void {
+  getDb()
+    .prepare(
+      `UPDATE notification SET status = 'done', resolved_at = datetime('now','localtime')
+       WHERE person_id = ? AND kind = 'awaiting_reply' AND status <> 'done'`
+    )
+    .run(personId)
+}
+
+/** 답장 대기 중인 사람 (알림 생성용) */
+export function awaitingReplyPeople(): Person[] {
+  const rows = getDb()
+    .prepare(`${PERSON_SELECT} WHERE ${AWAITING_SQL} ORDER BY p.last_outbound_at`)
+    .all({ cutoff: awaitingCutoff() }) as PersonRow[]
+  return hydrate(rows)
 }
 
 /* ────────────────────────── 설정 (연동 앱) ────────────────────────── */
@@ -972,10 +1268,13 @@ export function getSettings(): AppSettings {
     value: string
   }[]
   const map = new Map(rows.map((r) => [r.key, r.value]))
+  const days = Number(map.get('awaiting_reply_days'))
   return {
     msClientId: map.get('oauth_ms_client_id') ?? '',
     googleClientId: map.get('oauth_google_client_id') ?? '',
-    hasGoogleClientSecret: hasSecret(secretKeys.googleClientSecret)
+    hasGoogleClientSecret: hasSecret(secretKeys.googleClientSecret),
+    awaitingReplyDays: Number.isFinite(days) && days > 0 ? days : 7,
+    syncOnStartup: map.get('sync_on_startup') !== '0'
   }
 }
 
@@ -987,6 +1286,9 @@ export function saveSettings(input: AppSettings): AppSettings {
   db.transaction(() => {
     upsert.run('oauth_ms_client_id', normalizeText(input.msClientId))
     upsert.run('oauth_google_client_id', normalizeText(input.googleClientId))
+    const days = Math.min(Math.max(Math.round(Number(input.awaitingReplyDays) || 7), 1), 90)
+    upsert.run('awaiting_reply_days', String(days))
+    upsert.run('sync_on_startup', input.syncOnStartup === false ? '0' : '1')
   })()
   const secret = input.googleClientSecret
   if (secret === 'CLEAR') deleteSecret(secretKeys.googleClientSecret)

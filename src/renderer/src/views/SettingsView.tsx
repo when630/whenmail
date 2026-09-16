@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import {
   Archive,
+  Bell,
   CircleAlert,
   Database,
   DownloadCloud,
@@ -19,7 +20,13 @@ import {
   Trash2,
   Users
 } from 'lucide-react'
-import type { Account, AppSettings, OutlookAdapter, UpdateState } from '../../../shared/types'
+import type {
+  Account,
+  AppSettings,
+  OutlookAdapter,
+  SyncState,
+  UpdateState
+} from '../../../shared/types'
 import { ACCOUNT_KIND_LABEL } from '../../../shared/accounts'
 import { useDialog } from '../components/dialogs'
 import { getThemePref, setThemePref, type ThemePref } from '../theme'
@@ -44,7 +51,9 @@ const UPDATE_LABEL: Record<UpdateState['status'], string> = {
 const EMPTY_SETTINGS: AppSettings = {
   msClientId: '',
   googleClientId: '',
-  hasGoogleClientSecret: false
+  hasGoogleClientSecret: false,
+  awaitingReplyDays: 7,
+  syncOnStartup: true
 }
 
 const AZURE_URL =
@@ -70,6 +79,10 @@ export default function SettingsView({
   const [savingApps, setSavingApps] = useState(false)
   const [editing, setEditing] = useState<Account | 'new' | null>(null)
   const [testing, setTesting] = useState<number | null>(null)
+  const [sync, setSync] = useState<SyncState | null>(null)
+  const [days, setDays] = useState(7)
+  const [onStartup, setOnStartup] = useState(true)
+  const [savingSync, setSavingSync] = useState(false)
   const { confirm, toast } = useDialog()
 
   const reloadAccounts = useCallback(async () => {
@@ -90,8 +103,16 @@ export default function SettingsView({
       setSettings(s)
       setMsId(s.msClientId)
       setGoogleId(s.googleClientId)
+      setDays(s.awaitingReplyDays)
+      setOnStartup(s.syncOnStartup)
     })
-    return window.api.update.onState(setUpdate)
+    window.api.sync.state().then(setSync)
+    const offSync = window.api.sync.onState(setSync)
+    const offUpdate = window.api.update.onState(setUpdate)
+    return () => {
+      offSync()
+      offUpdate()
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -102,9 +123,9 @@ export default function SettingsView({
     setSavingApps(true)
     try {
       const saved = await window.api.settings.save({
+        ...settings,
         msClientId: msId,
         googleClientId: googleId,
-        hasGoogleClientSecret: settings.hasGoogleClientSecret,
         googleClientSecret: googleSecret || undefined
       })
       setSettings(saved)
@@ -123,6 +144,25 @@ export default function SettingsView({
     const saved = await window.api.settings.save({ ...settings, googleClientSecret: 'CLEAR' })
     setSettings(saved)
     toast('Google 클라이언트 시크릿을 삭제했습니다')
+  }
+
+  const saveSync = async (): Promise<void> => {
+    setSavingSync(true)
+    try {
+      const saved = await window.api.settings.save({
+        ...settings,
+        awaitingReplyDays: days,
+        syncOnStartup: onStartup
+      })
+      setSettings(saved)
+      setDays(saved.awaitingReplyDays)
+      setOnStartup(saved.syncOnStartup)
+      toast('알림 설정이 저장되었습니다')
+    } catch (e) {
+      toast(e instanceof Error ? e.message : String(e), 'error')
+    } finally {
+      setSavingSync(false)
+    }
   }
 
   const changeTheme = (pref: ThemePref): void => {
@@ -241,6 +281,14 @@ export default function SettingsView({
                   </small>
                 </span>
                 {!a.connected && <span className="badge warn">재연결 필요</span>}
+                {a.connected && a.sync_enabled && a.can_read && (
+                  <span className="badge mode-com" title="이 계정에서 메일 왕래를 읽어 옵니다">
+                    읽기 켜짐
+                  </span>
+                )}
+                {a.connected && a.sync_enabled && !a.can_read && (
+                  <span className="badge warn">읽기 권한 필요</span>
+                )}
                 <span className="spacer" />
                 {!a.is_default && (
                   <button className="btn ghost sm" onClick={() => makeDefault(a)}>
@@ -380,6 +428,91 @@ export default function SettingsView({
             저장
           </button>
         </div>
+      </section>
+
+      <section className="settings-section">
+        <h2>
+          <Bell size={16} />
+          알림과 메일 확인
+        </h2>
+        <p className="muted">
+          whenmail은 백그라운드에 상주하지 않습니다. 앱을 켤 때와 직접 누를 때만 메일을 확인하고, 그
+          사이에 생긴 일은 알림함에 쌓아 둡니다. 계정별 읽기 사용 여부는 계정 편집에서 켭니다.
+        </p>
+        <div className="form-grid">
+          <label className="form-field">
+            <span>
+              회신 대기 판정 기간{' '}
+              <em className="muted hint-inline">— 보낸 뒤 이만큼 지나도 답이 없으면 알림</em>
+            </span>
+            <div className="days-row">
+              <input
+                type="number"
+                min={1}
+                max={90}
+                value={days}
+                onChange={(e) => setDays(Number(e.target.value))}
+              />
+              <span className="muted">일</span>
+            </div>
+          </label>
+          <label className="option-row">
+            <input
+              type="checkbox"
+              checked={onStartup}
+              onChange={(e) => setOnStartup(e.target.checked)}
+            />
+            앱을 켤 때 메일을 한 번 확인
+          </label>
+        </div>
+        <div className="settings-actions">
+          <button
+            className="btn"
+            disabled={sync?.phase === 'running'}
+            onClick={() => window.api.sync.run()}
+          >
+            {sync?.phase === 'running' ? (
+              <Loader2 size={15} className="spin" />
+            ) : (
+              <RefreshCw size={15} />
+            )}
+            지금 메일 확인
+          </button>
+          <span className="spacer" />
+          {(days !== settings.awaitingReplyDays || onStartup !== settings.syncOnStartup) && (
+            <span className="dirty-hint">
+              <CircleAlert size={14} />
+              저장되지 않음
+            </span>
+          )}
+          <button
+            className="btn primary"
+            onClick={saveSync}
+            disabled={
+              savingSync ||
+              (days === settings.awaitingReplyDays && onStartup === settings.syncOnStartup)
+            }
+          >
+            {savingSync ? <Loader2 size={15} className="spin" /> : <Save size={15} />}
+            저장
+          </button>
+        </div>
+        <p className="muted settings-status">
+          {sync?.phase === 'running' && (
+            <>
+              {sync.account ? `${sync.account} 확인 중` : '확인 중'} ({sync.done}/{sync.total})
+            </>
+          )}
+          {sync?.phase === 'done' && (
+            <>
+              마지막 확인 {sync.finishedAt?.slice(5, 16) ?? '—'}
+              {sync.fetched > 0 ? ` · 새 메일 ${sync.fetched}건` : ''}
+              {sync.message ? ` · ${sync.message}` : ''}
+            </>
+          )}
+          {sync?.phase === 'error' && <span className="field-error">{sync.message}</span>}
+          {(!sync || sync.phase === 'idle') && '아직 확인하지 않았습니다'}
+        </p>
       </section>
 
       <section className="settings-section">

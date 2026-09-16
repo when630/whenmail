@@ -16,10 +16,13 @@ export type OAuthKind = Extract<AccountKind, 'm365' | 'gmail'>
 interface Provider {
   authorizeUrl: string
   tokenUrl: string
+  /** 초안 생성에 필요한 기본 스코프 */
   scopes: string[]
+  /** 읽기 동기화에 추가로 필요한 스코프 */
+  readScopes: string[]
   /** 인가 요청에 덧붙일 파라미터 */
   extraAuthParams: Record<string, string>
-  profile: (accessToken: string) => Promise<OAuthResult>
+  profile: (accessToken: string) => Promise<Omit<OAuthResult, 'canRead'>>
 }
 
 const PROVIDERS: Record<OAuthKind, Provider> = {
@@ -27,6 +30,8 @@ const PROVIDERS: Record<OAuthKind, Provider> = {
     authorizeUrl: 'https://login.microsoftonline.com/common/oauth2/v2.0/authorize',
     tokenUrl: 'https://login.microsoftonline.com/common/oauth2/v2.0/token',
     scopes: ['openid', 'profile', 'email', 'offline_access', 'User.Read', 'Mail.ReadWrite'],
+    // Mail.ReadWrite가 읽기까지 포함하므로 추가 스코프가 없다
+    readScopes: [],
     extraAuthParams: { prompt: 'select_account' },
     profile: async (token) => {
       const me = (await getJson('https://graph.microsoft.com/v1.0/me', token)) as {
@@ -44,6 +49,9 @@ const PROVIDERS: Record<OAuthKind, Provider> = {
     authorizeUrl: 'https://accounts.google.com/o/oauth2/v2/auth',
     tokenUrl: 'https://oauth2.googleapis.com/token',
     scopes: ['openid', 'email', 'https://www.googleapis.com/auth/gmail.compose'],
+    // 목록 검색(q)이 gmail.metadata에서 막혀 있어 읽기에는 readonly가 필요하다.
+    // 실제 조회는 format=metadata로만 해서 본문은 받아오지 않는다
+    readScopes: ['https://www.googleapis.com/auth/gmail.readonly'],
     extraAuthParams: { access_type: 'offline', prompt: 'consent' },
     profile: async (token) => {
       const info = (await getJson('https://openidconnect.googleapis.com/v1/userinfo', token)) as {
@@ -59,6 +67,25 @@ export interface OAuthClientConfig {
   clientId: string
   /** Google 데스크톱 앱 클라이언트에만 필요 */
   clientSecret?: string
+}
+
+/** 해당 종류가 읽기 동기화를 위해 받아야 하는 스코프를 이미 갖고 있는지 */
+export function scopeHasRead(kind: OAuthKind, scope: string | undefined): boolean {
+  const needed = PROVIDERS[kind].readScopes
+  if (needed.length === 0) return true
+  const granted = (scope ?? '').split(/\s+/).filter(Boolean)
+  return needed.every((s) => granted.includes(s))
+}
+
+/** 저장된 토큰이 읽기 권한을 갖고 있는지 */
+export function tokenCanRead(kind: OAuthKind, accountId: number): boolean {
+  const raw = getSecret(secretKeys.oauth(accountId))
+  if (!raw) return false
+  try {
+    return scopeHasRead(kind, (JSON.parse(raw) as StoredToken).scope)
+  } catch {
+    return false
+  }
 }
 
 interface StoredToken {
@@ -160,7 +187,8 @@ function page(title: string, body: string): string {
 export async function connectOAuth(
   kind: OAuthKind,
   client: OAuthClientConfig,
-  storageKey: string
+  storageKey: string,
+  withRead = false
 ): Promise<OAuthResult> {
   if (!client.clientId.trim()) {
     throw new Error(
@@ -170,6 +198,7 @@ export async function connectOAuth(
     )
   }
   const provider = PROVIDERS[kind]
+  const scopes = withRead ? [...provider.scopes, ...provider.readScopes] : provider.scopes
   const verifier = base64url(randomBytes(48))
   const challenge = base64url(createHash('sha256').update(verifier).digest())
   const state = base64url(randomBytes(16))
@@ -180,7 +209,7 @@ export async function connectOAuth(
     client_id: client.clientId.trim(),
     response_type: 'code',
     redirect_uri: redirectUri,
-    scope: provider.scopes.join(' '),
+    scope: scopes.join(' '),
     state,
     code_challenge: challenge,
     code_challenge_method: 'S256',
@@ -208,7 +237,8 @@ export async function connectOAuth(
     throw new Error('리프레시 토큰을 받지 못했습니다. 앱 등록의 리디렉션/권한 설정을 확인하세요')
   }
   setSecret(storageKey, JSON.stringify(stored))
-  return provider.profile(stored.access_token)
+  const profile = await provider.profile(stored.access_token)
+  return { ...profile, canRead: scopeHasRead(kind, stored.scope ?? scopes.join(' ')) }
 }
 
 /** 저장된 토큰으로 액세스 토큰을 얻는다. 만료됐으면 갱신해 다시 저장 */

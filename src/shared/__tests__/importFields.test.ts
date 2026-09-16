@@ -28,6 +28,9 @@ const person: Person = {
   cards: [],
   tags: ['전시회', 'VIP'],
   last_contact_at: null,
+  last_inbound_at: null,
+  last_outbound_at: null,
+  awaiting_reply: false,
   created_at: '',
   updated_at: ''
 }

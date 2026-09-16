@@ -3,6 +3,7 @@ import type {
   AccountInput,
   AccountKind,
   Activity,
+  AppNotification,
   AppSettings,
   BulkPersonPatch,
   DraftOptions,
@@ -14,6 +15,8 @@ import type {
   ExportFormat,
   ImportParseResult,
   ImportSummary,
+  MailEntry,
+  NotificationStatus,
   OAuthResult,
   OcrScanResult,
   Organization,
@@ -23,6 +26,7 @@ import type {
   PersonFilter,
   PersonInput,
   TagCount,
+  SyncState,
   TemplateAttachment,
   TemplateInput,
   UpdateState
@@ -75,12 +79,33 @@ export interface WhenmailApi {
      */
     connectOAuth: (
       kind: Extract<AccountKind, 'm365' | 'gmail'>,
-      accountId?: number
+      accountId?: number,
+      /** 읽기 동기화용 스코프까지 함께 요청 */
+      withRead?: boolean
     ) => Promise<OAuthResult>
     /** IMAP 접속 확인 + 초안 폴더 탐지. accountId가 있고 비밀번호를 비우면 저장된 값 사용 */
     testImap: (input: AccountInput, accountId?: number) => Promise<{ draftsPath: string }>
     /** 계정 자기 주소로 테스트 초안 1건 */
     sendTest: (id: number) => Promise<DraftResult>
+  }
+  mail: {
+    /** 사람과 오간 메일 헤더 (최신순) */
+    list: (personId: number, limit?: number) => Promise<MailEntry[]>
+  }
+  notifications: {
+    /** 알림함. 기본은 처리 완료를 뺀 목록 */
+    list: (includeDone?: boolean) => Promise<AppNotification[]>
+    unreadCount: () => Promise<number>
+    setStatus: (id: number, status: NotificationStatus) => Promise<AppNotification[]>
+    markAllRead: () => Promise<AppNotification[]>
+    /** 처리 완료 알림 비우기 (onlyDone=false면 전부) */
+    clear: (onlyDone?: boolean) => Promise<AppNotification[]>
+  }
+  sync: {
+    state: () => Promise<SyncState>
+    /** 지금 동기화. personId를 주면 그 사람 주소만 */
+    run: (personId?: number) => Promise<SyncState>
+    onState: (cb: (state: SyncState) => void) => () => void
   }
   tags: {
     list: () => Promise<TagCount[]>

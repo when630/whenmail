@@ -3,12 +3,15 @@ import type {
   Account,
   AccountInput,
   Activity,
+  AppNotification,
   AppSettings,
   DuplicateGroup,
   EmailTemplate,
+  MailEntry,
   Organization,
   Person,
-  PersonInput
+  PersonInput,
+  SyncState
 } from '../../shared/types'
 
 /**
@@ -59,6 +62,9 @@ export function installMockApiIfNeeded(): void {
     cards: [],
     tags: [],
     last_contact_at: null,
+    last_inbound_at: null,
+    last_outbound_at: null,
+    awaiting_reply: false,
     created_at: now,
     updated_at: now
   }
@@ -82,7 +88,10 @@ export function installMockApiIfNeeded(): void {
       memo: '9월 전시회에서 인사',
       cards: [{ id: 1, image_path: '/mock/card1.png', received_at: now }],
       tags: ['전시회', 'VIP'],
-      last_contact_at: '2026-09-10 14:20:00'
+      last_contact_at: '2026-09-10 14:20:00',
+      last_outbound_at: '2026-09-10 14:20:00',
+      last_inbound_at: '2026-09-02 09:00:00',
+      awaiting_reply: true
     },
     {
       ...base,
@@ -202,13 +211,16 @@ export function installMockApiIfNeeded(): void {
   let settings: AppSettings = {
     msClientId: '3f2c1a7e-0000-0000-0000-abcdef123456',
     googleClientId: '',
-    hasGoogleClientSecret: false
+    hasGoogleClientSecret: false,
+    awaitingReplyDays: 7,
+    syncOnStartup: true
   }
   const accountBase = {
     signature_enabled: true,
     default_bcc: '',
     default_bcc_enabled: false,
     connected: true,
+    can_read: false,
     sync_enabled: false,
     last_sync_at: null,
     last_sync_error: '',
@@ -238,6 +250,9 @@ export function installMockApiIfNeeded(): void {
       default_cc: '',
       default_cc_enabled: false,
       is_default: false,
+      can_read: true,
+      sync_enabled: true,
+      last_sync_at: '2026-09-16 15:40:00',
       config: {}
     },
     {
@@ -275,8 +290,83 @@ export function installMockApiIfNeeded(): void {
     ...accountBase,
     ...input,
     id,
-    connected: true
+    connected: true,
+    can_read: input.kind !== 'outlook_local'
   })
+
+  const mails: MailEntry[] = [
+    {
+      id: 1,
+      accountId: 2,
+      accountName: '회사 Microsoft 365',
+      messageId: 'AAMk-1',
+      threadId: 'T1',
+      direction: 'out',
+      counterpart: 'sy.kim@hanbit.example',
+      subject: '[한빛물산] 김서연님, 반갑습니다',
+      occurredAt: '2026-09-10 14:22:00',
+      openRef: 'https://outlook.office.com/mail/id/AAMk-1'
+    },
+    {
+      id: 2,
+      accountId: 2,
+      accountName: '회사 Microsoft 365',
+      messageId: 'AAMk-2',
+      threadId: 'T0',
+      direction: 'in',
+      counterpart: 'sy.kim@hanbit.example',
+      subject: '전시회 부스 위치 문의드립니다',
+      occurredAt: '2026-09-02 09:00:00',
+      openRef: 'https://outlook.office.com/mail/id/AAMk-2'
+    }
+  ]
+
+  let notifications: AppNotification[] = [
+    {
+      id: 1,
+      kind: 'awaiting_reply',
+      person_id: 1,
+      person_name: '김서연',
+      account_id: null,
+      title: '김서연님 회신 대기',
+      body: '2026-09-10에 보낸 뒤 회신이 없습니다',
+      status: 'unread',
+      created_at: '2026-09-16 09:00:00',
+      resolved_at: null
+    },
+    {
+      id: 2,
+      kind: 'reply_received',
+      person_id: 2,
+      person_name: '박준호',
+      account_id: 2,
+      title: '박준호님에게서 회신이 왔습니다',
+      body: 'Re: 박준호님, 요청하신 자료 보내드립니다',
+      status: 'unread',
+      created_at: '2026-09-15 17:20:00',
+      resolved_at: null
+    },
+    {
+      id: 3,
+      kind: 'sync_error',
+      person_id: null,
+      person_name: '',
+      account_id: 4,
+      title: '네이버 메일 동기화 실패',
+      body: 'IMAP 비밀번호가 저장되어 있지 않습니다',
+      status: 'read',
+      created_at: '2026-09-14 08:10:00',
+      resolved_at: null
+    }
+  ]
+
+  let syncState: SyncState = {
+    phase: 'done',
+    done: 2,
+    total: 2,
+    fetched: 3,
+    finishedAt: '2026-09-16 15:40:00'
+  }
 
   const fromInput = (id: number, input: PersonInput, prev?: Person): Person => ({
     ...base,
@@ -327,6 +417,7 @@ export function installMockApiIfNeeded(): void {
         if (filter?.tag) list = list.filter((p) => p.tags.includes(filter.tag!))
         if (filter?.organizationId)
           list = list.filter((p) => p.organization_id === filter.organizationId)
+        if (filter?.awaitingReply) list = list.filter((p) => p.awaiting_reply)
         const q = filter?.search?.trim()
         if (q)
           list = list.filter((p) =>
@@ -413,9 +504,10 @@ export function installMockApiIfNeeded(): void {
         accounts = accounts.map((a) => ({ ...a, is_default: a.id === id }))
         return accounts
       },
-      connectOAuth: async (kind) => ({
+      connectOAuth: async (kind, _accountId, withRead) => ({
         address: kind === 'm365' ? 'hong@company.example' : 'hong.personal@gmail.example',
         displayName: '홍길동',
+        canRead: kind === 'm365' || Boolean(withRead),
         pendingKey: 'pending:mock'
       }),
       testImap: async () => ({ draftsPath: 'Drafts' }),
@@ -425,6 +517,36 @@ export function installMockApiIfNeeded(): void {
         ok: true,
         adapter: 'imap' as const
       })
+    },
+    mail: {
+      list: async (personId) => (personId === 1 ? mails : [])
+    },
+    notifications: {
+      list: async (includeDone) =>
+        includeDone ? notifications : notifications.filter((n) => n.status !== 'done'),
+      unreadCount: async () => notifications.filter((n) => n.status === 'unread').length,
+      setStatus: async (id, status) => {
+        notifications = notifications.map((n) => (n.id === id ? { ...n, status } : n))
+        return notifications.filter((n) => n.status !== 'done')
+      },
+      markAllRead: async () => {
+        notifications = notifications.map((n) =>
+          n.status === 'unread' ? { ...n, status: 'read' as const } : n
+        )
+        return notifications.filter((n) => n.status !== 'done')
+      },
+      clear: async (onlyDone) => {
+        notifications = onlyDone === false ? [] : notifications.filter((n) => n.status !== 'done')
+        return notifications.filter((n) => n.status !== 'done')
+      }
+    },
+    sync: {
+      state: async () => syncState,
+      run: async () => {
+        syncState = { ...syncState, phase: 'done', fetched: 0, finishedAt: '2026-09-16 15:45:00' }
+        return syncState
+      },
+      onState: () => () => undefined
     },
     tags: {
       list: async () => [
@@ -524,6 +646,8 @@ export function installMockApiIfNeeded(): void {
         settings = {
           msClientId: input.msClientId,
           googleClientId: input.googleClientId,
+          awaitingReplyDays: input.awaitingReplyDays,
+          syncOnStartup: input.syncOnStartup,
           hasGoogleClientSecret:
             input.googleClientSecret === 'CLEAR'
               ? false

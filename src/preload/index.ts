@@ -4,6 +4,7 @@ import type {
   Account,
   AccountInput,
   Activity,
+  AppNotification,
   AppSettings,
   BulkPersonPatch,
   DraftOptions,
@@ -15,6 +16,8 @@ import type {
   ExportFormat,
   ImportParseResult,
   ImportSummary,
+  MailEntry,
+  NotificationStatus,
   OAuthResult,
   OcrScanResult,
   Organization,
@@ -23,6 +26,7 @@ import type {
   Person,
   PersonFilter,
   PersonInput,
+  SyncState,
   TagCount,
   TemplateAttachment,
   TemplateInput,
@@ -71,11 +75,38 @@ const api: WhenmailApi = {
       ipcRenderer.invoke('accounts:update', id, input),
     remove: (id: number): Promise<void> => ipcRenderer.invoke('accounts:delete', id),
     setDefault: (id: number): Promise<Account[]> => ipcRenderer.invoke('accounts:setDefault', id),
-    connectOAuth: (kind: 'm365' | 'gmail', accountId?: number): Promise<OAuthResult> =>
-      ipcRenderer.invoke('accounts:connectOAuth', kind, accountId),
+    connectOAuth: (
+      kind: 'm365' | 'gmail',
+      accountId?: number,
+      withRead?: boolean
+    ): Promise<OAuthResult> =>
+      ipcRenderer.invoke('accounts:connectOAuth', kind, accountId, withRead),
     testImap: (input: AccountInput, accountId?: number): Promise<{ draftsPath: string }> =>
       ipcRenderer.invoke('accounts:testImap', input, accountId),
     sendTest: (id: number): Promise<DraftResult> => ipcRenderer.invoke('accounts:sendTest', id)
+  },
+  mail: {
+    list: (personId: number, limit?: number): Promise<MailEntry[]> =>
+      ipcRenderer.invoke('mail:list', personId, limit)
+  },
+  notifications: {
+    list: (includeDone?: boolean): Promise<AppNotification[]> =>
+      ipcRenderer.invoke('notifications:list', includeDone),
+    unreadCount: (): Promise<number> => ipcRenderer.invoke('notifications:unreadCount'),
+    setStatus: (id: number, status: NotificationStatus): Promise<AppNotification[]> =>
+      ipcRenderer.invoke('notifications:setStatus', id, status),
+    markAllRead: (): Promise<AppNotification[]> => ipcRenderer.invoke('notifications:markAllRead'),
+    clear: (onlyDone?: boolean): Promise<AppNotification[]> =>
+      ipcRenderer.invoke('notifications:clear', onlyDone)
+  },
+  sync: {
+    state: (): Promise<SyncState> => ipcRenderer.invoke('sync:state'),
+    run: (personId?: number): Promise<SyncState> => ipcRenderer.invoke('sync:run', personId),
+    onState: (cb: (state: SyncState) => void): (() => void) => {
+      const listener = (_e: Electron.IpcRendererEvent, state: SyncState): void => cb(state)
+      ipcRenderer.on('sync:state', listener)
+      return () => ipcRenderer.removeListener('sync:state', listener)
+    }
   },
   tags: {
     list: (): Promise<TagCount[]> => ipcRenderer.invoke('tags:list')

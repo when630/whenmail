@@ -5,6 +5,7 @@ import icon from '../../resources/icon.png?asset'
 import { registerIpcHandlers } from './ipc'
 import { initUpdater } from './updater'
 import { migrateLegacyData } from './migrate'
+import { registerSyncHandlers, syncOnStartup } from './sync'
 
 function createWindow(): void {
   // Create the browser window.
@@ -57,9 +58,11 @@ app.whenReady().then(() => {
 
   migrateLegacyData()
   registerIpcHandlers()
+  registerSyncHandlers()
   initUpdater()
 
   createWindow()
+  syncOnStartup()
 
   app.on('activate', function () {
     // On macOS it's common to re-create a window in the app when the

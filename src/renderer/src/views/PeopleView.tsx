@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   Building2,
+  Clock,
   Download,
   GitMerge,
   IdCard,
@@ -28,6 +29,8 @@ import ExportModal from './ExportModal'
 interface Props {
   newPersonSignal?: number
   importSignal?: number
+  /** 알림함에서 사람 열기 — 같은 사람을 다시 눌러도 열리도록 순번(n)을 함께 받는다 */
+  openPerson?: { id: number; n: number } | null
   /** 회사 화면에서 넘어온 회사 필터 */
   organizationFilter?: { id: number; name: string } | null
   onClearOrganizationFilter?: () => void
@@ -36,6 +39,7 @@ interface Props {
 export default function PeopleView({
   newPersonSignal = 0,
   importSignal = 0,
+  openPerson = null,
   organizationFilter = null,
   onClearOrganizationFilter
 }: Props): React.JSX.Element {
@@ -43,6 +47,8 @@ export default function PeopleView({
   const [search, setSearch] = useState('')
   const [allTags, setAllTags] = useState<TagCount[]>([])
   const [activeTag, setActiveTag] = useState<string | null>(null)
+  const [awaitingOnly, setAwaitingOnly] = useState(false)
+  const [awaitingCount, setAwaitingCount] = useState(0)
   const [selected, setSelected] = useState<Set<number>>(new Set())
   const [editing, setEditing] = useState<Person | 'new' | null>(null)
   const [detail, setDetail] = useState<Person | null>(null)
@@ -56,23 +62,26 @@ export default function PeopleView({
   const { confirm, toast } = useDialog()
 
   const reload = useCallback(
-    async (q?: string, tag?: string | null) => {
-      const [list, tags, dups, orgs] = await Promise.all([
+    async (q?: string, tag?: string | null, awaiting?: boolean) => {
+      const [list, tags, dups, orgs, awaitingList] = await Promise.all([
         window.api.people.list({
           search: q,
           tag: tag ?? undefined,
-          organizationId: organizationFilter?.id
+          organizationId: organizationFilter?.id,
+          awaitingReply: awaiting || undefined
         }),
         window.api.tags.list(),
         window.api.people.duplicates(),
-        window.api.organizations.list()
+        window.api.organizations.list(),
+        window.api.people.list({ awaitingReply: true })
       ])
       setPeople(list)
       setAllTags(tags)
       setDupCount(dups.length)
       setCompanyOptions(orgs.map((o) => o.name))
+      setAwaitingCount(awaitingList.length)
       // 열려 있는 상세는 최신 데이터로 갱신
-      setDetail((d) => (d ? (list.find((p) => p.id === d.id) ?? null) : null))
+      setDetail((d) => (d ? (list.find((p) => p.id === d.id) ?? d) : null))
     },
     [organizationFilter?.id]
   )
@@ -82,12 +91,24 @@ export default function PeopleView({
     // 첫 로드·태그/회사 전환은 즉시, 검색 입력은 디바운스
     if (firstLoad.current) {
       firstLoad.current = false
-      reload(search, activeTag)
+      reload(search, activeTag, awaitingOnly)
       return
     }
-    const t = setTimeout(() => reload(search, activeTag), 150)
+    const t = setTimeout(() => reload(search, activeTag, awaitingOnly), 150)
     return () => clearTimeout(t)
-  }, [search, activeTag, reload])
+  }, [search, activeTag, awaitingOnly, reload])
+
+  // 알림함에서 넘어온 사람 열기 — openPerson은 요청할 때마다 새 객체라 그때만 돈다
+  useEffect(() => {
+    if (!openPerson) return
+    let alive = true
+    window.api.people.get(openPerson.id).then((p) => {
+      if (alive && p) setDetail(p)
+    })
+    return () => {
+      alive = false
+    }
+  }, [openPerson])
 
   // 팔레트 등 바깥에서 온 신호 — 값이 바뀐 렌더에서 바로 상태를 맞춘다
   const [seenNewSignal, setSeenNewSignal] = useState(newPersonSignal)
@@ -118,7 +139,7 @@ export default function PeopleView({
       else if (editing) saved = await window.api.people.update(editing.id, input)
       else return
       setEditing(null)
-      await reload(search, activeTag)
+      await reload(search, activeTag, awaitingOnly)
       if (detail && detail.id === saved.id) setDetail(saved)
       toast(isNew ? '사람이 등록되었습니다' : '저장되었습니다')
     } catch (e) {
@@ -141,7 +162,7 @@ export default function PeopleView({
       return next
     })
     if (detail?.id === person.id) setDetail(null)
-    await reload(search, activeTag)
+    await reload(search, activeTag, awaitingOnly)
     toast('삭제되었습니다')
   }
 
@@ -158,7 +179,7 @@ export default function PeopleView({
     try {
       const removed = await window.api.people.removeMany(targets.map((p) => p.id))
       setSelected(new Set())
-      await reload(search, activeTag)
+      await reload(search, activeTag, awaitingOnly)
       toast(`${removed}명을 삭제했습니다`)
     } catch (e) {
       toast(e instanceof Error ? e.message : String(e), 'error')
@@ -172,7 +193,7 @@ export default function PeopleView({
         patch
       )
       setBulkEditing(false)
-      await reload(search, activeTag)
+      await reload(search, activeTag, awaitingOnly)
       toast(`${updated}명을 수정했습니다`)
     } catch (e) {
       toast(e instanceof Error ? e.message : String(e), 'error')
@@ -190,7 +211,7 @@ export default function PeopleView({
 
   const list = people ?? []
   const selectedPeople = list.filter((p) => selected.has(p.id))
-  const hasFilter = Boolean(search || activeTag || organizationFilter)
+  const hasFilter = Boolean(search || activeTag || organizationFilter || awaitingOnly)
 
   return (
     <div className="view">
@@ -268,8 +289,17 @@ export default function PeopleView({
         </div>
       )}
 
-      {(allTags.length > 0 || organizationFilter) && (
+      {(allTags.length > 0 || organizationFilter || awaitingCount > 0) && (
         <div className="tag-filter">
+          {awaitingCount > 0 && (
+            <button
+              className={`chip chip-awaiting ${awaitingOnly ? 'chip-active' : ''}`}
+              onClick={() => setAwaitingOnly((v) => !v)}
+              title="보낸 뒤 회신이 없는 사람만 봅니다"
+            >
+              <Clock size={12} /> 답장 대기 <span className="chip-count">{awaitingCount}</span>
+            </button>
+          )}
           {organizationFilter && (
             <button
               className="chip chip-active chip-org"
@@ -394,7 +424,16 @@ export default function PeopleView({
                       {p.tags.length > 3 && <span className="muted">+{p.tags.length - 3}</span>}
                     </span>
                   </td>
-                  <td className="nowrap muted">{p.last_contact_at?.slice(0, 10) ?? '—'}</td>
+                  <td className="nowrap muted">
+                    <span className="contact-cell">
+                      {p.last_contact_at?.slice(0, 10) ?? '—'}
+                      {p.awaiting_reply && (
+                        <span className="badge warn" title="보낸 뒤 회신이 없습니다">
+                          <Clock size={10} /> 대기
+                        </span>
+                      )}
+                    </span>
+                  </td>
                   <td className="col-actions">
                     <button
                       className="btn ghost sm"
@@ -460,7 +499,7 @@ export default function PeopleView({
             setMerging(false)
             if (merged) {
               setSelected(new Set())
-              reload(search, activeTag)
+              reload(search, activeTag, awaitingOnly)
             }
           }}
         />
@@ -476,7 +515,7 @@ export default function PeopleView({
         <ImportModal
           onClose={(imported) => {
             setImporting(false)
-            if (imported) reload(search, activeTag)
+            if (imported) reload(search, activeTag, awaitingOnly)
           }}
         />
       )}

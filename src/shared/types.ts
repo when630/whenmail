@@ -47,8 +47,14 @@ export interface Person {
   memo: string
   cards: BusinessCard[]
   tags: string[]
-  /** 마지막 연락 일시 (현재는 마지막 초안 생성 기준. 읽기 통합 후 송수신 반영) */
+  /** 마지막 연락 일시 — 초안 생성과 실제 송수신 중 가장 최근 */
   last_contact_at: string | null
+  /** 이 사람에게서 마지막으로 받은 시각 (읽기 동기화 결과) */
+  last_inbound_at: string | null
+  /** 이 사람에게 마지막으로 보낸 시각 (초안 생성 또는 실제 발신) */
+  last_outbound_at: string | null
+  /** 내가 보낸 뒤 설정한 기간이 지나도록 회신이 없는 상태 (조회 시 계산) */
+  awaiting_reply: boolean
   created_at: string
   updated_at: string
 }
@@ -77,6 +83,8 @@ export interface PersonFilter {
   search?: string
   tag?: string
   organizationId?: number
+  /** 답장 대기 중인 사람만 */
+  awaitingReply?: boolean
 }
 
 export interface TagCount {
@@ -134,6 +142,8 @@ export interface AccountConfig {
   imapUser?: string
   /** 초안 폴더 경로 (연결 테스트로 자동 탐지, 비우면 \Drafts special-use) */
   imapDraftsPath?: string
+  /** 읽기 동기화에서 훑을 폴더 (비우면 INBOX + \Sent 자동 탐지) */
+  imapReadPaths?: string[]
 }
 
 /** 계정 = 발신 프로필. 서명·기본 참조는 템플릿이 아니라 계정에 속한다 */
@@ -154,6 +164,9 @@ export interface Account {
   config: AccountConfig
   /** OAuth 토큰·IMAP 비밀번호가 저장되어 있는지 (로컬 Outlook은 항상 true) */
   connected: boolean
+  /** 메일 읽기 권한이 있는지 — OAuth는 토큰 스코프, IMAP은 연결되면 가능, 로컬 Outlook은 불가 */
+  can_read: boolean
+  /** 읽기 동기화 사용 여부 */
   sync_enabled: boolean
   last_sync_at: string | null
   last_sync_error: string
@@ -173,6 +186,8 @@ export interface AccountInput {
   default_bcc_enabled: boolean
   is_default: boolean
   config: AccountConfig
+  /** 읽기 동기화 사용 여부 */
+  sync_enabled: boolean
   /** imap: 비밀번호(앱 비밀번호). 비우면 기존 값 유지 */
   imapPassword?: string
   /** m365/gmail: connectOAuth가 돌려준 임시 토큰 키 — 저장 시 계정으로 옮긴다 */
@@ -183,6 +198,8 @@ export interface AccountInput {
 export interface OAuthResult {
   address: string
   displayName: string
+  /** 메일 읽기 권한까지 받았는지 */
+  canRead: boolean
   /** 새 계정일 때 토큰이 임시로 저장된 키. AccountInput.pendingOAuthKey로 넘긴다 */
   pendingKey?: string
 }
@@ -281,6 +298,71 @@ export interface DuplicateGroup {
   people: Person[]
 }
 
+/* ────────────────────────── 메일 읽기 ────────────────────────── */
+
+/** 읽기 어댑터가 돌려주는 메일 헤더 — 본문·첨부는 담지 않는다 */
+export interface MailHeader {
+  /** 계정 안에서 고유한 메시지 식별자 */
+  messageId: string
+  threadId: string
+  /** in = 상대에게서 받음, out = 내가 보냄 */
+  direction: 'in' | 'out'
+  /** 상대 주소 (질의에 쓴 주소) */
+  counterpart: string
+  subject: string
+  /** ISO 또는 'YYYY-MM-DD HH:mm:ss' */
+  occurredAt: string
+  /** 원문을 여는 링크나 식별자 */
+  openRef: string
+}
+
+/** 사람 타임라인에 섞여 들어가는 메일 한 줄 */
+export interface MailEntry extends MailHeader {
+  id: number
+  accountId: number
+  /** 계정 표시 이름 */
+  accountName: string
+}
+
+export type SyncPhase = 'idle' | 'running' | 'done' | 'error'
+
+export interface SyncState {
+  phase: SyncPhase
+  /** 진행 중인 계정 이름 */
+  account?: string
+  /** 처리한 계정 수 / 전체 */
+  done: number
+  total: number
+  /** 이번 동기화로 새로 들어온 메일 수 */
+  fetched: number
+  message?: string
+  finishedAt?: string
+}
+
+/* ────────────────────────── 알림함 ────────────────────────── */
+
+/**
+ * awaiting_reply: 보낸 뒤 기간이 지나도 회신 없음
+ * reply_received: 기다리던 사람에게서 회신 도착
+ * sync_error: 계정 동기화 실패
+ */
+export type NotificationKind = 'awaiting_reply' | 'reply_received' | 'sync_error'
+
+export type NotificationStatus = 'unread' | 'read' | 'done'
+
+export interface AppNotification {
+  id: number
+  kind: NotificationKind
+  person_id: number | null
+  person_name: string
+  account_id: number | null
+  title: string
+  body: string
+  status: NotificationStatus
+  created_at: string
+  resolved_at: string | null
+}
+
 export interface RenderWarning {
   variable: string
   /** 값이 비어 기본값이 쓰였으면 그 기본값, 기본값도 없으면 null */
@@ -297,6 +379,10 @@ export interface AppSettings {
   hasGoogleClientSecret: boolean
   /** 저장 시에만 쓰는 시크릿 값. 빈 문자열이면 유지, 'CLEAR'면 삭제 */
   googleClientSecret?: string
+  /** 보낸 뒤 이 일수가 지나도 회신이 없으면 "답장 대기"로 본다 (기본 7) */
+  awaitingReplyDays: number
+  /** 앱을 켤 때 읽기 동기화를 자동으로 한 번 돌릴지 */
+  syncOnStartup: boolean
 }
 
 /** 초안 생성 시 모든 수신자에게 공통 적용되는 옵션 */

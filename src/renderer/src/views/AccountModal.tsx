@@ -2,6 +2,7 @@ import { useState } from 'react'
 import {
   CheckCircle2,
   CircleAlert,
+  Inbox,
   Link2,
   Loader2,
   MailCheck,
@@ -18,7 +19,12 @@ import type {
   OutlookAdapter,
   OutlookModePref
 } from '../../../shared/types'
-import { ACCOUNT_KIND_DESC, ACCOUNT_KIND_LABEL, capabilitiesOf } from '../../../shared/accounts'
+import {
+  ACCOUNT_KIND_DESC,
+  ACCOUNT_KIND_LABEL,
+  capabilitiesOf,
+  canReadKind
+} from '../../../shared/accounts'
 import { invalidAddresses } from '../../../shared/address'
 import { useDialog } from '../components/dialogs'
 import RichEditor from '../components/RichEditor'
@@ -68,6 +74,7 @@ function emptyInput(kind: AccountKind): AccountInput {
     default_bcc: '',
     default_bcc_enabled: true,
     is_default: false,
+    sync_enabled: false,
     config:
       kind === 'outlook_local'
         ? { outlookMode: 'auto' }
@@ -89,6 +96,7 @@ function fromAccount(a: Account): AccountInput {
     default_bcc: a.default_bcc,
     default_bcc_enabled: a.default_bcc_enabled,
     is_default: a.is_default,
+    sync_enabled: a.sync_enabled,
     config: { ...a.config }
   }
 }
@@ -125,6 +133,8 @@ export default function AccountModal({
   const [testing, setTesting] = useState(false)
   const [saving, setSaving] = useState(false)
   const [oauthDone, setOauthDone] = useState<string | null>(null)
+  /** 이번 연결로 읽기 권한까지 받았는지 (저장 전 표시용) */
+  const [canRead, setCanRead] = useState<boolean | null>(null)
   const [testResult, setTestResult] = useState<string | null>(null)
   const { toast } = useDialog()
 
@@ -149,6 +159,9 @@ export default function AccountModal({
     kind === 'm365' ? Boolean(settings.msClientId.trim()) : Boolean(settings.googleClientId.trim())
   const oauthConnected = Boolean(account?.connected) || Boolean(form.pendingOAuthKey)
 
+  // 읽기 권한 보유 — 이번에 연결했으면 그 결과, 아니면 저장된 계정 값
+  const readGranted = canRead ?? account?.can_read ?? false
+
   const localMode: OutlookAdapter | null =
     kind === 'outlook_local'
       ? form.config.outlookMode === 'com' || form.config.outlookMode === 'eml'
@@ -157,11 +170,11 @@ export default function AccountModal({
       : null
   const caps = capabilitiesOf(kind, localMode)
 
-  const connect = async (): Promise<void> => {
+  const connect = async (withRead = form.sync_enabled): Promise<void> => {
     if (kind !== 'm365' && kind !== 'gmail') return
     setConnecting(true)
     try {
-      const result = await window.api.accounts.connectOAuth(kind, account?.id)
+      const result = await window.api.accounts.connectOAuth(kind, account?.id, withRead)
       setForm((f) => ({
         ...f,
         address: result.address || f.address,
@@ -169,6 +182,7 @@ export default function AccountModal({
         pendingOAuthKey: result.pendingKey ?? f.pendingOAuthKey
       }))
       setOauthDone(result.address)
+      setCanRead(result.canRead)
       toast(`${result.address} 연결됨`)
     } catch (e) {
       toast(e instanceof Error ? e.message : String(e), 'error')
@@ -234,14 +248,14 @@ export default function AccountModal({
         </div>
 
         {!account && (
-          <div className="kind-grid" role="radiogroup" aria-label="계정 종류">
+          <div className="account-kind-grid" role="radiogroup" aria-label="계정 종류">
             {KINDS.map((k) => (
               <button
                 key={k}
                 type="button"
                 role="radio"
                 aria-checked={kind === k}
-                className={`kind-card ${kind === k ? 'chosen' : ''}`}
+                className={`account-kind-card ${kind === k ? 'chosen' : ''}`}
                 onClick={() => setForm({ ...emptyInput(k), is_default: form.is_default })}
               >
                 <strong>{ACCOUNT_KIND_LABEL[k]}</strong>
@@ -324,7 +338,7 @@ export default function AccountModal({
                   type="button"
                   className="btn primary"
                   disabled={!oauthReady || connecting}
-                  onClick={connect}
+                  onClick={() => connect()}
                 >
                   {connecting ? <Loader2 size={15} className="spin" /> : <Link2 size={15} />}
                   {connecting
@@ -447,6 +461,41 @@ export default function AccountModal({
                   </span>
                 )}
               </div>
+            </div>
+          )}
+
+          {canReadKind(kind) && (
+            <div className="sync-box">
+              <label className="option-row">
+                <input
+                  type="checkbox"
+                  checked={form.sync_enabled}
+                  onChange={(e) => set('sync_enabled', e.target.checked)}
+                />
+                <Inbox size={14} />이 계정에서 메일 왕래 읽기
+              </label>
+              <p className="muted">
+                사람과 오간 메일의 제목·날짜·방향만 저장합니다. 본문과 첨부는 가져오지 않습니다.
+                {kind === 'gmail' &&
+                  ' Gmail은 목록 검색에 읽기 권한이 필요해 다시 연결해야 합니다.'}
+              </p>
+              {form.sync_enabled && (kind === 'm365' || kind === 'gmail') && !readGranted && (
+                <div className="oauth-row">
+                  <span className="settings-warn">
+                    <CircleAlert size={14} />
+                    읽기 권한이 없습니다. 읽기를 포함해 다시 연결하세요
+                  </span>
+                  <button
+                    type="button"
+                    className="btn sm"
+                    disabled={!oauthReady || connecting}
+                    onClick={() => connect(true)}
+                  >
+                    {connecting ? <Loader2 size={14} className="spin" /> : <Link2 size={14} />}
+                    읽기 권한으로 다시 연결
+                  </button>
+                </div>
+              )}
             </div>
           )}
 
