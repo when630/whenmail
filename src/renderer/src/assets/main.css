@@ -1767,6 +1767,9 @@ kbd {
 
 .segment {
   display: inline-flex;
+  /* flex/grid 컨테이너 안에서는 inline-flex가 blockify되어 늘어나므로 내용 폭으로 고정 */
+  align-self: flex-start;
+  width: fit-content;
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
   overflow: hidden;
@@ -2918,8 +2921,13 @@ input[type='radio'] {
   align-items: center;
 }
 
+/* 계정 모달의 공통 항목(이름·기본 계정) 그리드 — 아래 참조 입력과 간격을 둔다 */
+.account-common {
+  margin-bottom: 14px;
+}
+
 .account-default {
-  align-self: end;
+  margin: 0;
 }
 
 .link-btn {

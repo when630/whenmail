@@ -474,7 +474,7 @@ export default function AccountModal({
         </section>
 
         {/* 공통: 발신 프로필 */}
-        <div className="form-grid">
+        <div className="form-grid account-common">
           <label className="form-field">
             <span>계정 이름</span>
             <input
@@ -483,14 +483,17 @@ export default function AccountModal({
               onChange={(e) => set('display_name', e.target.value)}
             />
           </label>
-          <label className="option-row account-default">
-            <input
-              type="checkbox"
-              checked={form.is_default}
-              onChange={(e) => set('is_default', e.target.checked)}
-            />
-            초안 만들기에서 기본으로 선택
-          </label>
+          <div className="form-field">
+            <span>기본 계정</span>
+            <label className="option-row account-default">
+              <input
+                type="checkbox"
+                checked={form.is_default}
+                onChange={(e) => set('is_default', e.target.checked)}
+              />
+              초안 만들기에서 기본으로 선택
+            </label>
+          </div>
         </div>
 
         <div className="compose-cc">
