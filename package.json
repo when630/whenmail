@@ -1,6 +1,6 @@
 {
   "name": "whenmail",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "명함 저장 + 이메일 템플릿 치환 + Outlook 초안 열기 데스크톱 앱",
   "main": "./out/main/index.js",
   "author": "when630",
@@ -26,6 +26,7 @@
     "adm-zip": "^0.6.0",
     "better-sqlite3": "^13.0.3",
     "electron-updater": "^6.8.9",
+    "imapflow": "^2.0.5",
     "lucide-react": "^1.38.0",
     "pretendard": "^1.3.9",
     "tesseract.js": "^7.0.0",
