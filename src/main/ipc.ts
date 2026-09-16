@@ -3,6 +3,8 @@ import path from 'node:path'
 import { renderTemplate, bodyToHtmlFragment, htmlToText, isHtmlBody } from '../shared/render'
 import { parseAddressList } from '../shared/address'
 import type {
+  Account,
+  AccountInput,
   AppSettings,
   BulkPersonPatch,
   DraftOptions,
@@ -16,14 +18,45 @@ import type {
   TemplateInput
 } from '../shared/types'
 import * as repo from './repo'
-import { detectOutlookMode, effectiveOutlookMode, openDraft } from './outlook'
+import { detectOutlookMode } from './outlook'
 import { pickAndParse } from './importer'
 import { imageToDataUrl, pickAndScanCard } from './ocr'
 import { exportBackup, importBackup } from './backup'
 import { existingAttachments, pickAttachments } from './attachments'
 import { exportPeople } from './exporter'
+import { createDraftForAccount, testImapConnection, type DraftMessage } from './adapters'
+import { connectOAuth, pendingOAuthKey } from './oauth'
+import { secretKeys } from './credentials'
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+
+const adapterCtx = { oauthClient: repo.oauthClientFor }
+
+/** 계정 서명·본문을 합쳐 어댑터 입력을 만든다 */
+function buildMessage(
+  account: Account,
+  to: string,
+  subject: string,
+  body: string,
+  cc: string[],
+  bcc: string[],
+  attachments: DraftMessage['attachments'],
+  includeSignature: boolean | undefined
+): DraftMessage {
+  const useSignature = account.signature_enabled && includeSignature !== false
+  const signature = useSignature ? account.signature_html.trim() : ''
+  return {
+    to,
+    cc,
+    bcc,
+    subject,
+    bodyFragment: bodyToHtmlFragment(body, signature),
+    text: isHtmlBody(body) ? htmlToText(body) : body,
+    // 앱 서명이 있으면 Outlook 기본 서명은 빼서 두 번 들어가지 않게
+    preserveOutlookSignature: signature === '',
+    attachments
+  }
+}
 
 export function registerIpcHandlers(): void {
   // 사람
@@ -64,6 +97,72 @@ export function registerIpcHandlers(): void {
   )
   ipcMain.handle('activities:delete', (_e, id: number) => repo.deleteActivity(id))
 
+  // 계정
+  ipcMain.handle('accounts:list', () => repo.listAccounts())
+  ipcMain.handle('accounts:get', (_e, id: number) => repo.getAccount(id))
+  ipcMain.handle('accounts:create', (_e, input: AccountInput) => repo.createAccount(input))
+  ipcMain.handle('accounts:update', (_e, id: number, input: AccountInput) =>
+    repo.updateAccount(id, input)
+  )
+  ipcMain.handle('accounts:delete', (_e, id: number) => repo.deleteAccount(id))
+  ipcMain.handle('accounts:setDefault', (_e, id: number) => repo.setDefaultAccount(id))
+  ipcMain.handle(
+    'accounts:connectOAuth',
+    async (_e, kind: 'm365' | 'gmail', accountId?: number) => {
+      const client = repo.oauthClientFor(kind)
+      if (accountId) {
+        const result = await connectOAuth(kind, client, secretKeys.oauth(accountId))
+        return result
+      }
+      const pendingKey = pendingOAuthKey()
+      const result = await connectOAuth(kind, client, pendingKey)
+      return { ...result, pendingKey }
+    }
+  )
+  ipcMain.handle('accounts:testImap', (_e, input: AccountInput, accountId?: number) =>
+    testImapConnection(
+      { id: accountId ?? 0, address: input.address, config: input.config },
+      input.imapPassword?.trim() || undefined
+    )
+  )
+  ipcMain.handle('accounts:sendTest', async (_e, id: number): Promise<DraftResult> => {
+    const account = repo.getAccount(id)
+    if (!account) throw new Error('계정을 찾을 수 없습니다')
+    const to = account.address.trim()
+    if (!to) {
+      return {
+        personId: 0,
+        personName: account.display_name,
+        ok: false,
+        error: '계정에 발신 주소가 없어 테스트 초안을 만들 수 없습니다'
+      }
+    }
+    try {
+      const adapter = await createDraftForAccount(
+        account,
+        buildMessage(
+          account,
+          to,
+          'whenmail 테스트 초안',
+          '이 초안은 whenmail 계정 연결 테스트로 만들어졌습니다. 보내지 않고 삭제해도 됩니다.',
+          [],
+          [],
+          [],
+          undefined
+        ),
+        adapterCtx
+      )
+      return { personId: 0, personName: account.display_name, ok: true, adapter }
+    } catch (e) {
+      return {
+        personId: 0,
+        personName: account.display_name,
+        ok: false,
+        error: e instanceof Error ? e.message : String(e)
+      }
+    }
+  })
+
   ipcMain.handle('tags:list', () => repo.listTags())
 
   ipcMain.handle('ocr:scanCard', () => pickAndScanCard())
@@ -98,12 +197,9 @@ export function registerIpcHandlers(): void {
     ): Promise<DraftResult[]> => {
       const template = repo.getTemplate(templateId)
       if (!template) throw new Error('템플릿을 찾을 수 없습니다')
+      const account = options.accountId ? repo.getAccount(options.accountId) : repo.defaultAccount()
+      if (!account) throw new Error('보낼 계정이 없습니다. 설정 > 계정에서 계정을 추가하세요')
       const people = repo.getPeople(targets.map((t) => t.personId))
-      const settings = repo.getSettings()
-      const mode = await effectiveOutlookMode(settings.outlookMode)
-      // 서명: 설정에서 켜져 있고, 이번 초안에서 끄지 않았을 때만
-      const useSignature = settings.signatureEnabled && options.includeSignature !== false
-      const signature = useSignature ? settings.signatureHtml.trim() : ''
       const attachments = existingAttachments(template.attachments)
       const cc = parseAddressList(options.cc)
       const bcc = parseAddressList(options.bcc)
@@ -125,24 +221,25 @@ export function registerIpcHandlers(): void {
           const data = { ...person, email: to }
           const subject = renderTemplate(template.subject_tpl, data).text
           const body = renderTemplate(template.body_tpl, data).text
-          const adapter = await openDraft(
-            {
+          const adapter = await createDraftForAccount(
+            account,
+            buildMessage(
+              account,
               to,
+              subject,
+              body,
               cc,
               bcc,
-              subject,
-              bodyFragment: bodyToHtmlFragment(body, signature),
-              text: isHtmlBody(body) ? htmlToText(body) : body,
-              // 앱 서명이 있으면 Outlook 기본 서명은 빼서 두 번 들어가지 않게
-              preserveOutlookSignature: signature === '',
-              attachments
-            },
-            mode
+              attachments,
+              options.includeSignature
+            ),
+            adapterCtx
           )
           repo.insertActivity({
             personId: person.id,
             kind: 'draft',
             templateId: template.id,
+            accountId: account.id,
             personName: person.name,
             personEmail: to,
             templateName: template.name,
@@ -159,7 +256,7 @@ export function registerIpcHandlers(): void {
           })
         }
         // 초안 창이 연속으로 뜰 때 Outlook이 놓치지 않도록 간격을 둔다
-        if (i < people.length - 1) await sleep(800)
+        if (i < people.length - 1 && account.kind === 'outlook_local') await sleep(800)
       }
 
       if (results.some((r) => r.ok)) repo.touchTemplateUsed(template.id)
@@ -168,7 +265,6 @@ export function registerIpcHandlers(): void {
   )
 
   ipcMain.handle('system:version', () => app.getVersion())
-  ipcMain.handle('system:outlookMode', () => effectiveOutlookMode(repo.getSettings().outlookMode))
   ipcMain.handle('system:outlookDetected', () => detectOutlookMode())
   ipcMain.handle('settings:get', () => repo.getSettings())
   ipcMain.handle('settings:save', (_e, input: AppSettings) => repo.saveSettings(input))
@@ -176,6 +272,10 @@ export function registerIpcHandlers(): void {
   ipcMain.handle('system:showInFolder', (_e, filePath: string) =>
     shell.showItemInFolder(path.resolve(filePath))
   )
+  ipcMain.handle('system:openExternal', (_e, url: string) => {
+    if (!/^https?:\/\//i.test(url)) throw new Error('허용되지 않은 주소입니다')
+    return shell.openExternal(url)
+  })
   ipcMain.handle('backup:export', () => exportBackup())
   ipcMain.handle('backup:import', () => importBackup())
 }

@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 import fs from 'node:fs/promises'
 import type { OutlookAdapter, OutlookModePref, TemplateAttachment } from '../shared/types'
+import { buildMime } from './mime'
 
 const execFileAsync = promisify(execFile)
 
@@ -76,10 +77,6 @@ export async function openDraft(
 const wrapHtml = (fragment: string): string => `<html><body>${fragment}</body></html>`
 const b64 = (s: string | Buffer): string =>
   (typeof s === 'string' ? Buffer.from(s, 'utf8') : s).toString('base64')
-/** MIME 본문용 76자 줄바꿈 base64 */
-const b64Lines = (buf: Buffer): string => buf.toString('base64').replace(/(.{76})/g, '$1\n')
-/** 헤더에 한글 등이 들어갈 때 쓰는 RFC 2047 인코딩 */
-const encodedWord = (s: string): string => `=?UTF-8?B?${b64(s)}?=`
 
 /**
  * 클래식 Outlook COM: MailItem.Display().
@@ -138,58 +135,16 @@ $mail.Display()
  * 서명은 앱 설정의 서명(bodyFragment에 포함)으로 넣는 것을 권장한다.
  */
 async function openViaEml(p: DraftPayload): Promise<void> {
-  const headers = [`To: ${p.to}`]
-  if (p.cc.length) headers.push(`Cc: ${p.cc.join(', ')}`)
-  if (p.bcc.length) headers.push(`Bcc: ${p.bcc.join(', ')}`)
-  headers.push(
-    `Subject: ${encodedWord(p.subject)}`,
-    'X-Unsent: 1',
-    `Message-ID: <${randomUUID()}@whenmail.local>`,
-    `Date: ${new Date().toUTCString()}`,
-    'MIME-Version: 1.0'
-  )
-
-  const htmlPart = b64Lines(Buffer.from(wrapHtml(p.bodyFragment), 'utf8'))
-  let body: string[]
-  if (p.attachments.length === 0) {
-    body = [
-      'Content-Type: text/html; charset=utf-8',
-      'Content-Transfer-Encoding: base64',
-      '',
-      htmlPart,
-      ''
-    ]
-  } else {
-    const boundary = `----=_whenmail_${randomUUID().replace(/-/g, '')}`
-    body = [
-      `Content-Type: multipart/mixed; boundary="${boundary}"`,
-      '',
-      `--${boundary}`,
-      'Content-Type: text/html; charset=utf-8',
-      'Content-Transfer-Encoding: base64',
-      '',
-      htmlPart,
-      ''
-    ]
-    for (const a of p.attachments) {
-      const data = await fs.readFile(a.path)
-      // 파일명에 한글이 있을 수 있어 RFC 2047 인코딩 + RFC 2231 filename* 둘 다 제공
-      const nameWord = encodedWord(a.name)
-      const nameStar = `UTF-8''${encodeURIComponent(a.name)}`
-      body.push(
-        `--${boundary}`,
-        `Content-Type: application/octet-stream; name="${nameWord}"`,
-        'Content-Transfer-Encoding: base64',
-        `Content-Disposition: attachment; filename="${nameWord}"; filename*=${nameStar}`,
-        '',
-        b64Lines(data),
-        ''
-      )
-    }
-    body.push(`--${boundary}--`, '')
-  }
-
-  const eml = [...headers, ...body].join('\n')
+  const eml = await buildMime({
+    to: p.to,
+    cc: p.cc,
+    bcc: p.bcc,
+    subject: p.subject,
+    html: wrapHtml(p.bodyFragment),
+    attachments: p.attachments,
+    extraHeaders: ['X-Unsent: 1'],
+    lineEnding: '\n'
+  })
 
   const dir = path.join(app.getPath('temp'), 'whenmail')
   await fs.mkdir(dir, { recursive: true })

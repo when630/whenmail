@@ -10,7 +10,8 @@ import {
   Settings,
   Users
 } from 'lucide-react'
-import type { OutlookAdapter, Person } from '../../shared/types'
+import type { Account, Person } from '../../shared/types'
+import { ACCOUNT_KIND_LABEL } from '../../shared/accounts'
 import { useDialog } from './components/dialogs'
 import CommandPalette, { type ViewKey } from './components/CommandPalette'
 import ComposeModal from './views/ComposeModal'
@@ -27,12 +28,6 @@ const NAV: { key: ViewKey; label: string; Icon: typeof Users }[] = [
   { key: 'activity', label: '활동', Icon: ActivityIcon },
   { key: 'settings', label: '설정', Icon: Settings }
 ]
-
-const MODE_LABEL: Record<OutlookAdapter, string> = {
-  com: 'Outlook 연동 · COM',
-  eml: 'Outlook 연동 · EML',
-  mailto: 'Outlook 연동 · mailto'
-}
 
 const VIEW_KEYS: ViewKey[] = ['people', 'companies', 'templates', 'activity', 'settings']
 
@@ -52,9 +47,21 @@ function initialExpanded(): boolean {
   }
 }
 
+/** 레일 하단 계정 표시 — 기본 계정 이름과 종류 */
+function accountStatus(accounts: Account[] | null): { text: string; tone: string } {
+  if (accounts === null) return { text: '계정 확인 중…', tone: 'unknown' }
+  const def = accounts.find((a) => a.is_default) ?? accounts[0]
+  if (!def) return { text: '계정 없음 — 설정에서 추가', tone: 'mailto' }
+  const kind = ACCOUNT_KIND_LABEL[def.kind]
+  return {
+    text: `${def.display_name} · ${kind}`,
+    tone: def.connected ? 'com' : 'eml'
+  }
+}
+
 export default function App(): React.JSX.Element {
   const [view, setView] = useState<ViewKey>(initialView)
-  const [outlookMode, setOutlookMode] = useState<OutlookAdapter | null>(null)
+  const [accounts, setAccounts] = useState<Account[] | null>(null)
   const [expanded, setExpanded] = useState(initialExpanded)
   const [version, setVersion] = useState('')
   const [paletteOpen, setPaletteOpen] = useState(
@@ -72,7 +79,7 @@ export default function App(): React.JSX.Element {
   const updateNotifiedRef = useRef<string | null>(null)
 
   useEffect(() => {
-    window.api.system.outlookMode().then(setOutlookMode)
+    window.api.accounts.list().then(setAccounts)
     window.api.system.version().then(setVersion)
   }, [])
 
@@ -128,6 +135,7 @@ export default function App(): React.JSX.Element {
   }
 
   const tip = (label: string): { 'data-tip'?: string } => (expanded ? {} : { 'data-tip': label })
+  const status = accountStatus(accounts)
 
   return (
     <div className="app">
@@ -180,14 +188,12 @@ export default function App(): React.JSX.Element {
           </button>
           <div className="rail-footer">
             <span
-              className={`mode-dot ${outlookMode ?? 'unknown'}`}
-              {...tip(outlookMode ? MODE_LABEL[outlookMode] : '연동 확인 중…')}
+              className={`mode-dot ${status.tone}`}
+              {...tip(status.text)}
               role="status"
-              aria-label={outlookMode ? MODE_LABEL[outlookMode] : '연동 확인 중'}
+              aria-label={status.text}
             />
-            <span className="rail-label rail-mode-text">
-              {outlookMode ? MODE_LABEL[outlookMode] : '연동 확인 중…'}
-            </span>
+            <span className="rail-label rail-mode-text">{status.text}</span>
           </div>
           <div className="rail-version rail-label">whenmail {version && `v${version}`}</div>
         </div>
@@ -205,9 +211,7 @@ export default function App(): React.JSX.Element {
           {view === 'companies' && <CompaniesView onShowPeople={showCompanyPeople} />}
           {view === 'templates' && <TemplatesView />}
           {view === 'activity' && <ActivityView />}
-          {view === 'settings' && (
-            <SettingsView outlookMode={outlookMode} onOutlookModeChange={setOutlookMode} />
-          )}
+          {view === 'settings' && <SettingsView onAccountsChange={setAccounts} />}
         </div>
       </main>
 

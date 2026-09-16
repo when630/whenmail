@@ -1,5 +1,7 @@
 import type { WhenmailApi } from '../../shared/api'
 import type {
+  Account,
+  AccountInput,
   Activity,
   AppSettings,
   DuplicateGroup,
@@ -149,6 +151,7 @@ export function installMockApiIfNeeded(): void {
       person_id: 1,
       kind: 'draft',
       template_id: 1,
+      account_id: 1,
       person_name: '김서연',
       person_email: 'sy.kim@hanbit.example',
       template_name: '첫 인사 메일',
@@ -161,6 +164,7 @@ export function installMockApiIfNeeded(): void {
       person_id: 1,
       kind: 'note',
       template_id: null,
+      account_id: null,
       person_name: '김서연',
       person_email: '',
       template_name: '',
@@ -173,6 +177,7 @@ export function installMockApiIfNeeded(): void {
       person_id: 1,
       kind: 'card',
       template_id: null,
+      account_id: null,
       person_name: '김서연',
       person_email: '',
       template_name: '',
@@ -185,6 +190,7 @@ export function installMockApiIfNeeded(): void {
       person_id: 2,
       kind: 'draft',
       template_id: 2,
+      account_id: 2,
       person_name: '박준호',
       person_email: 'jh.park@daesung.example',
       template_name: '자료 송부',
@@ -194,14 +200,83 @@ export function installMockApiIfNeeded(): void {
     }
   ]
   let settings: AppSettings = {
-    outlookMode: 'auto',
-    signatureHtml: '<p>홍길동 | whenmail</p>',
-    signatureEnabled: true,
-    defaultCc: 'team@whenmail.example',
-    defaultCcEnabled: true,
-    defaultBcc: '',
-    defaultBccEnabled: false
+    msClientId: '3f2c1a7e-0000-0000-0000-abcdef123456',
+    googleClientId: '',
+    hasGoogleClientSecret: false
   }
+  const accountBase = {
+    signature_enabled: true,
+    default_bcc: '',
+    default_bcc_enabled: false,
+    connected: true,
+    sync_enabled: false,
+    last_sync_at: null,
+    last_sync_error: '',
+    created_at: now,
+    updated_at: now
+  }
+  let accounts: Account[] = [
+    {
+      ...accountBase,
+      id: 1,
+      kind: 'outlook_local',
+      display_name: '회사 Outlook',
+      address: 'me@hanbit.example',
+      signature_html: '<p>홍길동 | 영업팀 과장</p>',
+      default_cc: 'team@whenmail.example',
+      default_cc_enabled: true,
+      is_default: true,
+      config: { outlookMode: 'auto' }
+    },
+    {
+      ...accountBase,
+      id: 2,
+      kind: 'm365',
+      display_name: '회사 Microsoft 365',
+      address: 'hong@company.example',
+      signature_html: '',
+      default_cc: '',
+      default_cc_enabled: false,
+      is_default: false,
+      config: {}
+    },
+    {
+      ...accountBase,
+      id: 3,
+      kind: 'gmail',
+      display_name: '개인 Gmail',
+      address: 'hong.personal@gmail.example',
+      signature_html: '<p>홍길동</p>',
+      default_cc: '',
+      default_cc_enabled: false,
+      is_default: false,
+      connected: false,
+      config: {}
+    },
+    {
+      ...accountBase,
+      id: 4,
+      kind: 'imap',
+      display_name: '네이버 메일',
+      address: 'hong@naver.example',
+      signature_html: '',
+      default_cc: '',
+      default_cc_enabled: false,
+      is_default: false,
+      config: {
+        imapHost: 'imap.naver.com',
+        imapPort: 993,
+        imapSecure: true,
+        imapDraftsPath: 'Drafts'
+      }
+    }
+  ]
+  const fromAccountInput = (id: number, input: AccountInput): Account => ({
+    ...accountBase,
+    ...input,
+    id,
+    connected: true
+  })
 
   const fromInput = (id: number, input: PersonInput, prev?: Person): Person => ({
     ...base,
@@ -303,6 +378,7 @@ export function installMockApiIfNeeded(): void {
           person_id: personId,
           kind: 'note',
           template_id: null,
+          account_id: null,
           person_name: people.find((p) => p.id === personId)?.name ?? '',
           person_email: '',
           template_name: '',
@@ -316,6 +392,39 @@ export function installMockApiIfNeeded(): void {
       remove: async (id) => {
         activities = activities.filter((a) => a.id !== id)
       }
+    },
+    accounts: {
+      list: async () => accounts,
+      get: async (id) => accounts.find((a) => a.id === id) ?? null,
+      create: async (input) => {
+        const a = fromAccountInput(Date.now(), input)
+        accounts = [...accounts, a]
+        return a
+      },
+      update: async (id, input) => {
+        const next = fromAccountInput(id, input)
+        accounts = accounts.map((a) => (a.id === id ? next : a))
+        return next
+      },
+      remove: async (id) => {
+        accounts = accounts.filter((a) => a.id !== id)
+      },
+      setDefault: async (id) => {
+        accounts = accounts.map((a) => ({ ...a, is_default: a.id === id }))
+        return accounts
+      },
+      connectOAuth: async (kind) => ({
+        address: kind === 'm365' ? 'hong@company.example' : 'hong.personal@gmail.example',
+        displayName: '홍길동',
+        pendingKey: 'pending:mock'
+      }),
+      testImap: async () => ({ draftsPath: 'Drafts' }),
+      sendTest: async (id) => ({
+        personId: 0,
+        personName: accounts.find((a) => a.id === id)?.display_name ?? '',
+        ok: true,
+        adapter: 'imap' as const
+      })
     },
     tags: {
       list: async () => [
@@ -359,13 +468,23 @@ export function installMockApiIfNeeded(): void {
       ]
     },
     drafts: {
-      create: async (targets) =>
-        targets.map((t) => ({
+      create: async (targets, _templateId, options) => {
+        const account = accounts.find((a) => a.id === options?.accountId) ?? accounts[0]
+        const adapter =
+          account?.kind === 'm365'
+            ? ('graph' as const)
+            : account?.kind === 'gmail'
+              ? ('gmail' as const)
+              : account?.kind === 'imap'
+                ? ('imap' as const)
+                : ('eml' as const)
+        return targets.map((t) => ({
           personId: t.personId,
           personName: people.find((p) => p.id === t.personId)?.name ?? '?',
           ok: true,
-          adapter: 'eml' as const
+          adapter
         }))
+      }
     },
     ocr: {
       scanCard: async () => ({
@@ -394,15 +513,22 @@ export function installMockApiIfNeeded(): void {
     },
     system: {
       version: async () => '0.0.0-dev',
-      outlookMode: async () => (settings.outlookMode === 'com' ? 'com' : 'eml'),
       outlookDetected: async () => 'eml',
       openDataFolder: async () => '',
-      showInFolder: async () => undefined
+      showInFolder: async () => undefined,
+      openExternal: async () => undefined
     },
     settings: {
       get: async () => settings,
       save: async (input) => {
-        settings = { ...input }
+        settings = {
+          msClientId: input.msClientId,
+          googleClientId: input.googleClientId,
+          hasGoogleClientSecret:
+            input.googleClientSecret === 'CLEAR'
+              ? false
+              : Boolean(input.googleClientSecret) || settings.hasGoogleClientSecret
+        }
         return settings
       }
     },

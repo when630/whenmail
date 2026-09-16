@@ -1,4 +1,7 @@
 import type {
+  Account,
+  AccountInput,
+  AccountKind,
   Activity,
   AppSettings,
   BulkPersonPatch,
@@ -11,6 +14,7 @@ import type {
   ExportFormat,
   ImportParseResult,
   ImportSummary,
+  OAuthResult,
   OcrScanResult,
   Organization,
   OrganizationInput,
@@ -57,6 +61,27 @@ export interface WhenmailApi {
     addNote: (personId: number, text: string) => Promise<Activity>
     remove: (id: number) => Promise<void>
   }
+  accounts: {
+    list: () => Promise<Account[]>
+    get: (id: number) => Promise<Account | null>
+    create: (input: AccountInput) => Promise<Account>
+    update: (id: number, input: AccountInput) => Promise<Account>
+    /** 계정 삭제 — 토큰·비밀번호도 함께 지운다. 초안 활동은 남는다 */
+    remove: (id: number) => Promise<void>
+    setDefault: (id: number) => Promise<Account[]>
+    /**
+     * 브라우저로 Microsoft 365 / Gmail 인증. accountId가 있으면 그 계정에 다시 연결,
+     * 없으면 pendingKey를 돌려주고 계정 저장 시 pendingOAuthKey로 넘긴다
+     */
+    connectOAuth: (
+      kind: Extract<AccountKind, 'm365' | 'gmail'>,
+      accountId?: number
+    ) => Promise<OAuthResult>
+    /** IMAP 접속 확인 + 초안 폴더 탐지. accountId가 있고 비밀번호를 비우면 저장된 값 사용 */
+    testImap: (input: AccountInput, accountId?: number) => Promise<{ draftsPath: string }>
+    /** 계정 자기 주소로 테스트 초안 1건 */
+    sendTest: (id: number) => Promise<DraftResult>
+  }
   tags: {
     list: () => Promise<TagCount[]>
   }
@@ -90,13 +115,12 @@ export interface WhenmailApi {
   }
   system: {
     version: () => Promise<string>
-    /** 설정을 반영한 실제 사용 어댑터 */
-    outlookMode: () => Promise<OutlookAdapter>
-    /** 설치 여부로 감지된 어댑터 (설정 무시) */
+    /** 설치 여부로 감지된 로컬 Outlook 어댑터 */
     outlookDetected: () => Promise<OutlookAdapter>
     openDataFolder: () => Promise<string>
     /** 파일이 있는 폴더를 탐색기에서 열고 파일을 선택 상태로 */
     showInFolder: (path: string) => Promise<void>
+    openExternal: (url: string) => Promise<void>
   }
   settings: {
     get: () => Promise<AppSettings>

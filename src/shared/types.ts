@@ -106,7 +106,98 @@ export interface TemplateAttachment {
   size: number
 }
 
+/** 로컬 Outlook 어댑터 체인 (COM → .eml → mailto) */
 export type OutlookAdapter = 'com' | 'eml' | 'mailto'
+
+/** 설정에서 고른 로컬 Outlook 연동 방식. auto는 설치 여부로 자동 감지 */
+export type OutlookModePref = 'auto' | 'com' | 'eml'
+
+/** 초안을 실제로 만든 경로 — 로컬 Outlook 3종 + API/IMAP 3종 */
+export type DraftAdapterKind = OutlookAdapter | 'graph' | 'gmail' | 'imap'
+
+/* ────────────────────────── 계정 ────────────────────────── */
+
+/**
+ * 계정 종류가 초안 생성 경로를 결정한다.
+ * outlook_local: 이 PC의 Outlook(COM/.eml) · m365: Graph API · gmail: Gmail API · imap: IMAP 초안 폴더
+ */
+export type AccountKind = 'outlook_local' | 'm365' | 'gmail' | 'imap'
+
+/** 종류별 비밀 아닌 설정 */
+export interface AccountConfig {
+  /** outlook_local */
+  outlookMode?: OutlookModePref
+  /** imap */
+  imapHost?: string
+  imapPort?: number
+  imapSecure?: boolean
+  imapUser?: string
+  /** 초안 폴더 경로 (연결 테스트로 자동 탐지, 비우면 \Drafts special-use) */
+  imapDraftsPath?: string
+}
+
+/** 계정 = 발신 프로필. 서명·기본 참조는 템플릿이 아니라 계정에 속한다 */
+export interface Account {
+  id: number
+  kind: AccountKind
+  display_name: string
+  /** 발신 주소 (OAuth 계정은 연결 시 자동, 로컬 Outlook은 비어 있을 수 있음) */
+  address: string
+  signature_html: string
+  signature_enabled: boolean
+  default_cc: string
+  default_cc_enabled: boolean
+  default_bcc: string
+  default_bcc_enabled: boolean
+  /** 초안 만들기에서 기본 선택되는 계정 */
+  is_default: boolean
+  config: AccountConfig
+  /** OAuth 토큰·IMAP 비밀번호가 저장되어 있는지 (로컬 Outlook은 항상 true) */
+  connected: boolean
+  sync_enabled: boolean
+  last_sync_at: string | null
+  last_sync_error: string
+  created_at: string
+  updated_at: string
+}
+
+export interface AccountInput {
+  kind: AccountKind
+  display_name: string
+  address: string
+  signature_html: string
+  signature_enabled: boolean
+  default_cc: string
+  default_cc_enabled: boolean
+  default_bcc: string
+  default_bcc_enabled: boolean
+  is_default: boolean
+  config: AccountConfig
+  /** imap: 비밀번호(앱 비밀번호). 비우면 기존 값 유지 */
+  imapPassword?: string
+  /** m365/gmail: connectOAuth가 돌려준 임시 토큰 키 — 저장 시 계정으로 옮긴다 */
+  pendingOAuthKey?: string
+}
+
+/** OAuth 연결 결과 */
+export interface OAuthResult {
+  address: string
+  displayName: string
+  /** 새 계정일 때 토큰이 임시로 저장된 키. AccountInput.pendingOAuthKey로 넘긴다 */
+  pendingKey?: string
+}
+
+/** 종류별 지원 범위 — 설정 화면과 미리보기 배지에 그대로 표시 */
+export interface AccountCapabilities {
+  html: boolean
+  attachments: boolean
+  /** 초안이 어디에 만들어지고 어떻게 열리는지 */
+  opens: string
+  /** 주의 문구 (없으면 '') */
+  warning: string
+}
+
+/* ────────────────────────── 활동 ────────────────────────── */
 
 /** 사람 타임라인의 한 줄. card=명함 등록, draft=초안 생성, note=메모, merge=병합 */
 export type ActivityKind = 'card' | 'draft' | 'note' | 'merge'
@@ -117,13 +208,15 @@ export interface Activity {
   person_id: number | null
   kind: ActivityKind
   template_id: number | null
+  /** 초안을 만든 계정 (삭제되면 null) */
+  account_id: number | null
   person_name: string
   /** 초안을 보낸 수신 주소 (draft) */
   person_email: string
   template_name: string
   /** 초안 제목, 메모 본문, 병합 설명 등 */
   summary: string
-  adapter: OutlookAdapter | ''
+  adapter: DraftAdapterKind | ''
   occurred_at: string
 }
 
@@ -137,7 +230,7 @@ export interface DraftResult {
   personId: number
   personName: string
   ok: boolean
-  adapter?: OutlookAdapter
+  adapter?: DraftAdapterKind
   error?: string
 }
 
@@ -194,30 +287,27 @@ export interface RenderWarning {
   usedDefault: string | null
 }
 
-/** 설정에서 고른 Outlook 연동 방식. auto는 설치 여부로 자동 감지 */
-export type OutlookModePref = 'auto' | 'com' | 'eml'
-
+/** 앱 전역 설정 — 연동 앱(OAuth 클라이언트) 정보. 계정별 값은 Account에 있다 */
 export interface AppSettings {
-  outlookMode: OutlookModePref
-  /** 본문 아래에 붙일 앱 자체 서명(HTML). 비우면 Outlook 기본 서명에 맡긴다 */
-  signatureHtml: string
-  /** 서명을 실제로 붙일지 — 끄면 값은 보존하되 적용하지 않는다 */
-  signatureEnabled: boolean
-  /** 초안 모달을 열 때 미리 채워지는 참조 주소 (쉼표/세미콜론 구분) */
-  defaultCc: string
-  defaultCcEnabled: boolean
-  /** 초안 모달을 열 때 미리 채워지는 숨은 참조 주소 */
-  defaultBcc: string
-  defaultBccEnabled: boolean
+  /** Azure 앱 등록의 애플리케이션(클라이언트) ID. 리디렉션 URI http://localhost (모바일 및 데스크톱) */
+  msClientId: string
+  /** Google Cloud OAuth 클라이언트 ID (데스크톱 앱 유형) */
+  googleClientId: string
+  /** Google 데스크톱 앱 클라이언트 시크릿이 저장돼 있는지 (값은 돌려주지 않음) */
+  hasGoogleClientSecret: boolean
+  /** 저장 시에만 쓰는 시크릿 값. 빈 문자열이면 유지, 'CLEAR'면 삭제 */
+  googleClientSecret?: string
 }
 
 /** 초안 생성 시 모든 수신자에게 공통 적용되는 옵션 */
 export interface DraftOptions {
+  /** 보낼 계정. 없으면 기본 계정 */
+  accountId?: number
   /** 참조 — 쉼표/세미콜론 구분 */
   cc?: string
   /** 숨은 참조 — 쉼표/세미콜론 구분 */
   bcc?: string
-  /** 이번 초안에 앱 서명을 붙일지 (기본: 설정의 서명 사용 여부) */
+  /** 이번 초안에 계정 서명을 붙일지 (기본: 계정의 서명 사용 여부) */
   includeSignature?: boolean
 }
 

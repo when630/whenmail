@@ -1,39 +1,34 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import {
   Archive,
   CircleAlert,
   Database,
   DownloadCloud,
   FolderOpen,
+  KeyRound,
   Loader2,
   MailCheck,
   Palette,
-  PenLine,
+  Pencil,
+  Plus,
   RefreshCw,
   RotateCcw,
-  Save
+  Save,
+  SendHorizontal,
+  Star,
+  Trash2,
+  Users
 } from 'lucide-react'
-import type {
-  AppSettings,
-  OutlookAdapter,
-  OutlookModePref,
-  UpdateState
-} from '../../../shared/types'
-import { invalidAddresses } from '../../../shared/address'
+import type { Account, AppSettings, OutlookAdapter, UpdateState } from '../../../shared/types'
+import { ACCOUNT_KIND_LABEL } from '../../../shared/accounts'
 import { useDialog } from '../components/dialogs'
-import RichEditor from '../components/RichEditor'
 import { getThemePref, setThemePref, type ThemePref } from '../theme'
+import AccountModal from './AccountModal'
 
 const THEME_OPTIONS: { value: ThemePref; label: string }[] = [
   { value: 'system', label: '시스템' },
   { value: 'light', label: '라이트' },
   { value: 'dark', label: '다크' }
-]
-
-const OUTLOOK_OPTIONS: { value: OutlookModePref; label: string }[] = [
-  { value: 'auto', label: '자동 감지' },
-  { value: 'com', label: '클래식 Outlook' },
-  { value: 'eml', label: '새 Outlook' }
 ]
 
 const UPDATE_LABEL: Record<UpdateState['status'], string> = {
@@ -46,140 +41,124 @@ const UPDATE_LABEL: Record<UpdateState['status'], string> = {
   error: '확인 실패'
 }
 
-const MODE_DESC: Record<OutlookAdapter, string> = {
-  com: '클래식 Outlook의 COM 자동화로 초안을 엽니다. HTML 본문·참조·숨은 참조가 완전하게 지원되고, Outlook 기본 서명이 본문 아래에 유지됩니다.',
-  eml: '.eml(X-Unsent) 파일로 새 Outlook(또는 기본 메일 앱)에서 초안을 엽니다. 새 Outlook 버전에 따라 HTML 본문이나 서명 위치가 제한될 수 있습니다.',
-  mailto: 'mailto 링크로 기본 메일 앱을 엽니다. 제목·텍스트 본문만 전달됩니다.'
+const EMPTY_SETTINGS: AppSettings = {
+  msClientId: '',
+  googleClientId: '',
+  hasGoogleClientSecret: false
 }
 
-const DEFAULT_SETTINGS: AppSettings = {
-  outlookMode: 'auto',
-  signatureHtml: '',
-  signatureEnabled: true,
-  defaultCc: '',
-  defaultCcEnabled: true,
-  defaultBcc: '',
-  defaultBccEnabled: true
-}
-
-/** 라벨 옆에 놓는 on/off 스위치 */
-function Switch({
-  checked,
-  onChange,
-  label
-}: {
-  checked: boolean
-  onChange: (v: boolean) => void
-  label: string
-}): React.JSX.Element {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      aria-label={label}
-      className={`switch ${checked ? 'on' : ''}`}
-      onClick={() => onChange(!checked)}
-    >
-      <span className="switch-knob" />
-      <span className="switch-text">{checked ? '사용' : '사용 안 함'}</span>
-    </button>
-  )
-}
+const AZURE_URL =
+  'https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade'
+const GOOGLE_URL = 'https://console.cloud.google.com/apis/credentials'
 
 export default function SettingsView({
-  outlookMode,
-  onOutlookModeChange
+  onAccountsChange
 }: {
-  outlookMode: OutlookAdapter | null
-  /** 연동 방식 설정을 바꾼 뒤 실제 어댑터가 달라지면 상위(레일 표시)에 알린다 */
-  onOutlookModeChange: (mode: OutlookAdapter) => void
+  /** 계정이 바뀌면 상위(레일 표시)에 알린다 */
+  onAccountsChange: (accounts: Account[]) => void
 }): React.JSX.Element {
   const [busy, setBusy] = useState<'export' | 'import' | null>(null)
   const [version, setVersion] = useState('')
   const [update, setUpdate] = useState<UpdateState>({ status: 'idle' })
   const [theme, setTheme] = useState<ThemePref>(getThemePref)
-  const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS)
+  const [accounts, setAccounts] = useState<Account[] | null>(null)
   const [detected, setDetected] = useState<OutlookAdapter | null>(null)
-  const [signatureDraft, setSignatureDraft] = useState('')
-  const [ccDraft, setCcDraft] = useState('')
-  const [bccDraft, setBccDraft] = useState('')
-  const [sigOn, setSigOn] = useState(true)
-  const [ccOn, setCcOn] = useState(true)
-  const [bccOn, setBccOn] = useState(true)
-  const [mailSaving, setMailSaving] = useState(false)
+  const [settings, setSettings] = useState<AppSettings>(EMPTY_SETTINGS)
+  const [msId, setMsId] = useState('')
+  const [googleId, setGoogleId] = useState('')
+  const [googleSecret, setGoogleSecret] = useState('')
+  const [savingApps, setSavingApps] = useState(false)
+  const [editing, setEditing] = useState<Account | 'new' | null>(null)
+  const [testing, setTesting] = useState<number | null>(null)
   const { confirm, toast } = useDialog()
 
-  const mailDirty =
-    signatureDraft !== settings.signatureHtml ||
-    ccDraft !== settings.defaultCc ||
-    bccDraft !== settings.defaultBcc ||
-    sigOn !== settings.signatureEnabled ||
-    ccOn !== settings.defaultCcEnabled ||
-    bccOn !== settings.defaultBccEnabled
-  const ccInvalid = invalidAddresses(ccDraft)
-  const bccInvalid = invalidAddresses(bccDraft)
-  const mailInvalid = ccInvalid.length > 0 || bccInvalid.length > 0
+  const reloadAccounts = useCallback(async () => {
+    const list = await window.api.accounts.list()
+    setAccounts(list)
+    onAccountsChange(list)
+  }, [onAccountsChange])
+
+  useEffect(() => {
+    window.api.system.version().then(setVersion)
+    window.api.update.state().then(setUpdate)
+    window.api.system.outlookDetected().then(setDetected)
+    window.api.accounts.list().then((list) => {
+      setAccounts(list)
+      onAccountsChange(list)
+    })
+    window.api.settings.get().then((s) => {
+      setSettings(s)
+      setMsId(s.msClientId)
+      setGoogleId(s.googleClientId)
+    })
+    return window.api.update.onState(setUpdate)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const appsDirty =
+    msId !== settings.msClientId || googleId !== settings.googleClientId || googleSecret !== ''
+
+  const saveApps = async (): Promise<void> => {
+    setSavingApps(true)
+    try {
+      const saved = await window.api.settings.save({
+        msClientId: msId,
+        googleClientId: googleId,
+        hasGoogleClientSecret: settings.hasGoogleClientSecret,
+        googleClientSecret: googleSecret || undefined
+      })
+      setSettings(saved)
+      setMsId(saved.msClientId)
+      setGoogleId(saved.googleClientId)
+      setGoogleSecret('')
+      toast('연동 앱 설정이 저장되었습니다')
+    } catch (e) {
+      toast(e instanceof Error ? e.message : String(e), 'error')
+    } finally {
+      setSavingApps(false)
+    }
+  }
+
+  const clearGoogleSecret = async (): Promise<void> => {
+    const saved = await window.api.settings.save({ ...settings, googleClientSecret: 'CLEAR' })
+    setSettings(saved)
+    toast('Google 클라이언트 시크릿을 삭제했습니다')
+  }
 
   const changeTheme = (pref: ThemePref): void => {
     setThemePref(pref)
     setTheme(pref)
   }
 
-  useEffect(() => {
-    window.api.system.version().then(setVersion)
-    window.api.update.state().then(setUpdate)
-    window.api.system.outlookDetected().then(setDetected)
-    window.api.settings.get().then((s) => {
-      setSettings(s)
-      setSignatureDraft(s.signatureHtml)
-      setCcDraft(s.defaultCc)
-      setBccDraft(s.defaultBcc)
-      setSigOn(s.signatureEnabled)
-      setCcOn(s.defaultCcEnabled)
-      setBccOn(s.defaultBccEnabled)
+  const removeAccount = async (a: Account): Promise<void> => {
+    const ok = await confirm({
+      title: '계정 삭제',
+      message: `'${a.display_name}' 계정을 삭제할까요?\n연결 토큰·비밀번호가 함께 지워지고, 이 계정으로 만든 초안 기록은 남습니다.`,
+      confirmLabel: '삭제',
+      danger: true
     })
-    return window.api.update.onState(setUpdate)
-  }, [])
-
-  const changeOutlookMode = async (pref: OutlookModePref): Promise<void> => {
-    const prev = settings
-    setSettings((s) => ({ ...s, outlookMode: pref }))
-    try {
-      const saved = await window.api.settings.save({ ...settings, outlookMode: pref })
-      setSettings(saved)
-      onOutlookModeChange(await window.api.system.outlookMode())
-    } catch (e) {
-      setSettings(prev)
-      toast(e instanceof Error ? e.message : String(e), 'error')
-    }
+    if (!ok) return
+    await window.api.accounts.remove(a.id)
+    await reloadAccounts()
+    toast('삭제되었습니다')
   }
 
-  const saveMailDefaults = async (): Promise<void> => {
-    if (mailInvalid) return
-    setMailSaving(true)
+  const makeDefault = async (a: Account): Promise<void> => {
+    const list = await window.api.accounts.setDefault(a.id)
+    setAccounts(list)
+    onAccountsChange(list)
+  }
+
+  const sendTest = async (a: Account): Promise<void> => {
+    setTesting(a.id)
     try {
-      const saved = await window.api.settings.save({
-        ...settings,
-        signatureHtml: signatureDraft,
-        signatureEnabled: sigOn,
-        defaultCc: ccDraft,
-        defaultCcEnabled: ccOn,
-        defaultBcc: bccDraft,
-        defaultBccEnabled: bccOn
-      })
-      setSettings(saved)
-      setSignatureDraft(saved.signatureHtml)
-      setCcDraft(saved.defaultCc)
-      setBccDraft(saved.defaultBcc)
-      setSigOn(saved.signatureEnabled)
-      setCcOn(saved.defaultCcEnabled)
-      setBccOn(saved.defaultBccEnabled)
-      toast('메일 기본값이 저장되었습니다')
+      const r = await window.api.accounts.sendTest(a.id)
+      if (r.ok) toast(`테스트 초안을 만들었습니다 (${r.adapter})`)
+      else toast(r.error ?? '실패', 'error')
     } catch (e) {
       toast(e instanceof Error ? e.message : String(e), 'error')
     } finally {
-      setMailSaving(false)
+      setTesting(null)
     }
   }
 
@@ -199,7 +178,7 @@ export default function SettingsView({
     const ok = await confirm({
       title: '백업에서 복원',
       message:
-        '복원하면 현재 사람·회사·템플릿·활동이 백업 파일 내용으로 교체되고 앱이 다시 시작됩니다.\n계속할까요?',
+        '복원하면 현재 사람·회사·템플릿·활동·계정 목록이 백업 파일 내용으로 교체되고 앱이 다시 시작됩니다.\n계정의 연결 토큰·비밀번호는 백업에 들어 있지 않아 복원 후 다시 연결해야 합니다.\n계속할까요?',
       confirmLabel: '복원',
       danger: true
     })
@@ -214,141 +193,195 @@ export default function SettingsView({
     }
   }
 
+  const localModeText = (a: Account): string => {
+    if (a.config.outlookMode === 'com') return '클래식'
+    if (a.config.outlookMode === 'eml') return '새 Outlook'
+    if (detected === 'com') return '자동(클래식)'
+    if (detected === 'eml') return '자동(새 Outlook)'
+    return '자동'
+  }
+
   return (
     <div className="view">
       <header className="view-header">
         <h1>설정</h1>
       </header>
+
       <section className="settings-section">
         <h2>
-          <MailCheck size={16} />
-          Outlook 연동
+          <Users size={16} />
+          계정
         </h2>
         <p className="muted">
-          초안을 열 Outlook을 선택합니다. 자동 감지는 클래식 Outlook이 설치되어 있으면 COM, 없으면
-          .eml 방식을 사용합니다.
+          초안을 만들 메일 계정입니다. 계정 종류가 초안 생성 경로를 정하고, 서명·기본 참조는
+          계정마다 따로 둡니다. 어떤 종류든 메일을 자동 전송하지 않고 초안까지만 만듭니다.
         </p>
-        <div className="segment" role="radiogroup" aria-label="Outlook 연동 방식">
-          {OUTLOOK_OPTIONS.map((opt) => (
-            <button
-              key={opt.value}
-              role="radio"
-              aria-checked={settings.outlookMode === opt.value}
-              className={settings.outlookMode === opt.value ? 'active' : ''}
-              onClick={() => changeOutlookMode(opt.value)}
-            >
-              {opt.label}
-            </button>
-          ))}
-        </div>
-        <p className="settings-status">
-          현재 모드:{' '}
-          <span className={`badge ${outlookMode ? `mode-${outlookMode}` : 'neutral'}`}>
-            {outlookMode ?? '확인 중…'}
-          </span>
-          {detected && (
-            <span className="muted">
-              {' '}
-              · 감지 결과: {detected === 'com' ? '클래식 Outlook 설치됨' : '클래식 Outlook 없음'}
-            </span>
-          )}
-        </p>
-        {outlookMode && <p className="muted">{MODE_DESC[outlookMode]}</p>}
-        {settings.outlookMode === 'com' && detected === 'eml' && (
+        {accounts === null ? null : accounts.length === 0 ? (
           <p className="settings-warn">
             <CircleAlert size={14} />
-            클래식 Outlook이 감지되지 않았습니다. COM 연동에 실패하면 자동으로 .eml 방식으로
-            넘어갑니다.
+            계정이 없어 초안을 만들 수 없습니다. 계정을 추가하세요.
           </p>
+        ) : (
+          <ul className="account-list">
+            {accounts.map((a) => (
+              <li key={a.id} className={a.is_default ? 'is-default' : ''}>
+                <span className={`badge kind-${a.kind}`}>{ACCOUNT_KIND_LABEL[a.kind]}</span>
+                <span className="account-main">
+                  <strong>
+                    {a.display_name}
+                    {a.is_default && (
+                      <span className="badge neutral account-default-badge">
+                        <Star size={10} /> 기본
+                      </span>
+                    )}
+                  </strong>
+                  <small className="muted">
+                    {a.address || (a.kind === 'outlook_local' ? '이 PC에 설치된 Outlook' : '')}
+                    {a.kind === 'outlook_local' && ` · ${localModeText(a)}`}
+                  </small>
+                </span>
+                {!a.connected && <span className="badge warn">재연결 필요</span>}
+                <span className="spacer" />
+                {!a.is_default && (
+                  <button className="btn ghost sm" onClick={() => makeDefault(a)}>
+                    기본으로
+                  </button>
+                )}
+                <button
+                  className="btn ghost sm"
+                  onClick={() => sendTest(a)}
+                  disabled={testing !== null || !a.connected || !a.address}
+                  title={
+                    a.address
+                      ? '내 주소로 테스트 초안 만들기'
+                      : '발신 주소가 있어야 테스트할 수 있습니다'
+                  }
+                >
+                  {testing === a.id ? (
+                    <Loader2 size={14} className="spin" />
+                  ) : (
+                    <SendHorizontal size={14} />
+                  )}
+                  테스트
+                </button>
+                <button
+                  className="btn ghost sm icon-only"
+                  aria-label={`${a.display_name} 편집`}
+                  onClick={() => setEditing(a)}
+                >
+                  <Pencil size={14} />
+                </button>
+                <button
+                  className="btn ghost sm icon-only danger"
+                  aria-label={`${a.display_name} 삭제`}
+                  onClick={() => removeAccount(a)}
+                >
+                  <Trash2 size={14} />
+                </button>
+              </li>
+            ))}
+          </ul>
         )}
-        <p className="muted">
-          whenmail은 메일을 자동 전송하지 않습니다. 항상 Outlook 초안을 열어 확인 후 직접
-          전송합니다.
-        </p>
+        <div className="settings-actions">
+          <button className="btn primary" onClick={() => setEditing('new')}>
+            <Plus size={15} />
+            계정 추가
+          </button>
+        </div>
       </section>
+
       <section className="settings-section">
         <h2>
-          <PenLine size={16} />
-          메일 기본값
+          <KeyRound size={16} />
+          연동 앱 (Microsoft 365 · Gmail)
         </h2>
         <p className="muted">
-          초안을 만들 때 참조·숨은 참조 칸에 미리 채워지는 주소입니다. 스위치를 끄면 값은 남겨 두고
-          적용만 하지 않으며, 초안마다 모달에서 고칠 수 있습니다.
+          Microsoft 365와 Gmail 계정은 OAuth로 연결합니다. 본인 명의의 앱을 한 번 등록하고
+          클라이언트 ID를 여기에 넣으면 됩니다. 클라이언트 ID는 공개 정보이며, 메일 비밀번호는 앱에
+          저장되지 않습니다.
         </p>
-        <div className="compose-cc">
-          <label className={`form-field ${ccOn ? '' : 'field-off'}`}>
-            <span className="field-head">
-              <span>기본 참조 (CC)</span>
-              <Switch checked={ccOn} onChange={setCcOn} label="기본 참조 사용" />
+        <div className="form-grid">
+          <label className="form-field form-field-wide">
+            <span>
+              Azure 앱(클라이언트) ID{' '}
+              <button
+                type="button"
+                className="link-btn"
+                onClick={() => window.api.system.openExternal(AZURE_URL)}
+              >
+                Azure 포털 열기
+              </button>
             </span>
             <input
-              placeholder="예: team@company.com; manager@company.com"
-              value={ccDraft}
-              onChange={(e) => setCcDraft(e.target.value)}
-              aria-invalid={ccInvalid.length > 0}
+              value={msId}
+              placeholder="예: 3f2c1a7e-…"
+              onChange={(e) => setMsId(e.target.value)}
             />
-            {ccInvalid.length > 0 && (
-              <span className="field-error">
-                <CircleAlert size={13} />
-                올바르지 않은 주소: {ccInvalid.join(', ')}
-              </span>
-            )}
+            <span className="muted hint-inline">
+              앱 등록 → 인증 → 플랫폼 추가 &quot;모바일 및 데스크톱 애플리케이션&quot; → 리디렉션
+              URI <code>http://localhost</code>. API 권한(위임): Mail.ReadWrite, User.Read
+            </span>
           </label>
-          <label className={`form-field ${bccOn ? '' : 'field-off'}`}>
-            <span className="field-head">
-              <span>기본 숨은 참조 (BCC)</span>
-              <Switch checked={bccOn} onChange={setBccOn} label="기본 숨은 참조 사용" />
+          <label className="form-field">
+            <span>
+              Google OAuth 클라이언트 ID{' '}
+              <button
+                type="button"
+                className="link-btn"
+                onClick={() => window.api.system.openExternal(GOOGLE_URL)}
+              >
+                Google Cloud 콘솔 열기
+              </button>
             </span>
             <input
-              placeholder="예: me@company.com"
-              value={bccDraft}
-              onChange={(e) => setBccDraft(e.target.value)}
-              aria-invalid={bccInvalid.length > 0}
+              value={googleId}
+              placeholder="예: 1234-….apps.googleusercontent.com"
+              onChange={(e) => setGoogleId(e.target.value)}
             />
-            {bccInvalid.length > 0 && (
-              <span className="field-error">
-                <CircleAlert size={13} />
-                올바르지 않은 주소: {bccInvalid.join(', ')}
-              </span>
-            )}
+            <span className="muted hint-inline">
+              사용자 인증 정보 → OAuth 클라이언트 ID → 유형 &quot;데스크톱 앱&quot;. Gmail API를
+              사용 설정하고, OAuth 동의 화면의 테스트 사용자에 본인 계정을 추가하세요
+            </span>
           </label>
-        </div>
-        <div className="field-head settings-subtitle">
-          <span>서명</span>
-          <Switch checked={sigOn} onChange={setSigOn} label="서명 사용" />
-        </div>
-        <p className="muted">
-          모든 초안의 본문 아래에 붙는 서명입니다. 비워 두면 클래식 Outlook의 기본 서명이 본문
-          아래에 그대로 유지됩니다.
-        </p>
-        <p className="muted">
-          새 Outlook은 .eml 초안을 열 때 자체 서명을 본문 위에 끼워 넣는 경우가 있습니다. 새
-          Outlook을 쓴다면 여기에 서명을 넣고 Outlook의 자동 서명은 꺼 두는 것을 권장합니다.
-        </p>
-        <div className={`signature-editor ${sigOn ? '' : 'field-off'}`}>
-          <RichEditor
-            value={signatureDraft}
-            placeholder="예: 홍길동 | 영업팀 과장 | 010-0000-0000"
-            onChange={setSignatureDraft}
-          />
+          <label className="form-field">
+            <span>
+              Google 클라이언트 시크릿{' '}
+              {settings.hasGoogleClientSecret && (
+                <>
+                  <span className="badge mode-com">저장됨</span>{' '}
+                  <button type="button" className="link-btn" onClick={clearGoogleSecret}>
+                    삭제
+                  </button>
+                </>
+              )}
+            </span>
+            <input
+              type="password"
+              value={googleSecret}
+              autoComplete="off"
+              placeholder={
+                settings.hasGoogleClientSecret
+                  ? '(변경할 때만 입력)'
+                  : '데스크톱 앱 유형은 시크릿을 함께 발급합니다'
+              }
+              onChange={(e) => setGoogleSecret(e.target.value)}
+            />
+          </label>
         </div>
         <div className="settings-actions settings-actions-end">
-          {mailDirty && (
+          {appsDirty && (
             <span className="dirty-hint">
               <CircleAlert size={14} />
               저장되지 않음
             </span>
           )}
-          <button
-            className="btn primary"
-            onClick={saveMailDefaults}
-            disabled={mailSaving || !mailDirty || mailInvalid}
-          >
-            {mailSaving ? <Loader2 size={15} className="spin" /> : <Save size={15} />}
+          <button className="btn primary" onClick={saveApps} disabled={savingApps || !appsDirty}>
+            {savingApps ? <Loader2 size={15} className="spin" /> : <Save size={15} />}
             저장
           </button>
         </div>
       </section>
+
       <section className="settings-section">
         <h2>
           <Palette size={16} />
@@ -369,6 +402,7 @@ export default function SettingsView({
           ))}
         </div>
       </section>
+
       <section className="settings-section">
         <h2>
           <DownloadCloud size={16} />
@@ -405,13 +439,15 @@ export default function SettingsView({
           )}
         </div>
       </section>
+
       <section className="settings-section">
         <h2>
           <Database size={16} />
           데이터
         </h2>
         <p className="muted">
-          사람·회사·템플릿·활동·명함 이미지·설정은 이 PC의 로컬 데이터 폴더에만 저장됩니다.
+          사람·회사·템플릿·활동·계정·명함 이미지는 이 PC의 로컬 데이터 폴더에만 저장됩니다. 연결
+          토큰과 IMAP 비밀번호는 별도 파일에 OS 암호화로 보관되며 백업 zip에는 들어가지 않습니다.
         </p>
         <div className="settings-actions">
           <button className="btn" onClick={() => window.api.system.openDataFolder()}>
@@ -427,7 +463,25 @@ export default function SettingsView({
             백업에서 복원…
           </button>
         </div>
+        <p className="muted settings-status">
+          <MailCheck size={14} /> whenmail은 어떤 계정으로도 메일을 자동 전송하지 않습니다.
+        </p>
       </section>
+
+      {editing && (
+        <AccountModal
+          account={editing === 'new' ? null : editing}
+          settings={settings}
+          detected={detected}
+          isNew={editing === 'new'}
+          onSaved={async (saved, wasNew) => {
+            setEditing(null)
+            await reloadAccounts()
+            toast(wasNew ? `'${saved.display_name}' 계정을 추가했습니다` : '저장되었습니다')
+          }}
+          onClose={() => setEditing(null)}
+        />
+      )}
     </div>
   )
 }

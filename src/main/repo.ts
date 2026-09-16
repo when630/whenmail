@@ -1,10 +1,22 @@
 import { getDb } from './db'
 import { pruneAttachments } from './attachments'
+import {
+  deleteAccountSecrets,
+  deleteSecret,
+  getSecret,
+  hasSecret,
+  secretKeys,
+  setSecret
+} from './credentials'
 import type {
+  Account,
+  AccountConfig,
+  AccountInput,
   Activity,
   AppSettings,
   BulkPersonPatch,
   BusinessCard,
+  DraftAdapterKind,
   DuplicateGroup,
   DuplicatePolicy,
   EmailAddress,
@@ -12,7 +24,6 @@ import type {
   ImportSummary,
   Organization,
   OrganizationInput,
-  OutlookAdapter,
   Person,
   PersonFilter,
   PersonInput,
@@ -621,20 +632,22 @@ export function insertActivity(entry: {
   personEmail?: string
   templateId?: number | null
   templateName?: string
+  accountId?: number | null
   summary: string
-  adapter?: OutlookAdapter
+  adapter?: DraftAdapterKind
 }): Activity {
   const db = getDb()
   const info = db
     .prepare(
       `INSERT INTO activity
-       (person_id, kind, template_id, person_name, person_email, template_name, summary, adapter)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+       (person_id, kind, template_id, account_id, person_name, person_email, template_name, summary, adapter)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       entry.personId,
       entry.kind,
       entry.templateId ?? null,
+      entry.accountId ?? null,
       entry.personName,
       entry.personEmail ?? '',
       entry.templateName ?? '',
@@ -768,21 +781,190 @@ export function touchTemplateUsed(id: number): void {
     .run(id)
 }
 
-/* ────────────────────────── 설정 ────────────────────────── */
+/* ────────────────────────── 계정 ────────────────────────── */
 
-const DEFAULT_SETTINGS: AppSettings = {
-  outlookMode: 'auto',
-  signatureHtml: '',
-  signatureEnabled: true,
-  defaultCc: '',
-  defaultCcEnabled: true,
-  defaultBcc: '',
-  defaultBccEnabled: true
+type AccountRow = Omit<
+  Account,
+  | 'signature_enabled'
+  | 'default_cc_enabled'
+  | 'default_bcc_enabled'
+  | 'is_default'
+  | 'config'
+  | 'connected'
+  | 'sync_enabled'
+> & {
+  signature_enabled: number
+  default_cc_enabled: number
+  default_bcc_enabled: number
+  is_default: number
+  config_json: string
+  sync_enabled: number
 }
 
-/** '1'/'0'로 저장된 불리언 설정. 값이 없으면 기본값 */
-const flag = (v: string | undefined, fallback: boolean): boolean =>
-  v === undefined ? fallback : v === '1'
+function parseConfig(json: string): AccountConfig {
+  try {
+    const v = JSON.parse(json)
+    return v && typeof v === 'object' ? (v as AccountConfig) : {}
+  } catch {
+    return {}
+  }
+}
+
+function rowToAccount(r: AccountRow): Account {
+  const connected =
+    r.kind === 'outlook_local'
+      ? true
+      : r.kind === 'imap'
+        ? hasSecret(secretKeys.imap(r.id))
+        : hasSecret(secretKeys.oauth(r.id))
+  return {
+    id: r.id,
+    kind: r.kind,
+    display_name: r.display_name,
+    address: r.address,
+    signature_html: r.signature_html,
+    signature_enabled: Boolean(r.signature_enabled),
+    default_cc: r.default_cc,
+    default_cc_enabled: Boolean(r.default_cc_enabled),
+    default_bcc: r.default_bcc,
+    default_bcc_enabled: Boolean(r.default_bcc_enabled),
+    is_default: Boolean(r.is_default),
+    config: parseConfig(r.config_json),
+    connected,
+    sync_enabled: Boolean(r.sync_enabled),
+    last_sync_at: r.last_sync_at,
+    last_sync_error: r.last_sync_error,
+    created_at: r.created_at,
+    updated_at: r.updated_at
+  }
+}
+
+export function listAccounts(): Account[] {
+  return (
+    getDb().prepare('SELECT * FROM account ORDER BY is_default DESC, id').all() as AccountRow[]
+  ).map(rowToAccount)
+}
+
+export function getAccount(id: number): Account | null {
+  const row = getDb().prepare('SELECT * FROM account WHERE id = ?').get(id) as
+    AccountRow | undefined
+  return row ? rowToAccount(row) : null
+}
+
+/** 기본 계정 — 없으면 첫 계정 */
+export function defaultAccount(): Account | null {
+  const list = listAccounts()
+  return list.find((a) => a.is_default) ?? list[0] ?? null
+}
+
+const ACCOUNT_KINDS = ['outlook_local', 'm365', 'gmail', 'imap'] as const
+
+function accountValues(input: AccountInput): Record<string, string | number> {
+  if (!ACCOUNT_KINDS.includes(input.kind)) throw new Error('알 수 없는 계정 종류입니다')
+  const config: AccountConfig = { ...(input.config ?? {}) }
+  if (input.kind === 'outlook_local') {
+    config.outlookMode =
+      config.outlookMode === 'com' || config.outlookMode === 'eml' ? config.outlookMode : 'auto'
+  }
+  if (input.kind === 'imap') {
+    if (!normalizeText(config.imapHost)) throw new Error('IMAP 서버 주소를 입력하세요')
+    config.imapHost = normalizeText(config.imapHost)
+    config.imapUser = normalizeText(config.imapUser)
+    config.imapDraftsPath = normalizeText(config.imapDraftsPath)
+    config.imapPort = Number(config.imapPort) || (config.imapSecure === false ? 143 : 993)
+  }
+  const display = normalizeText(input.display_name) || normalizeText(input.address)
+  if (!display) throw new Error('계정 이름을 입력하세요')
+  return {
+    kind: input.kind,
+    display_name: display,
+    address: normalizeText(input.address).toLowerCase(),
+    signature_html: String(input.signature_html ?? ''),
+    signature_enabled: input.signature_enabled === false ? 0 : 1,
+    default_cc: normalizeText(input.default_cc),
+    default_cc_enabled: input.default_cc_enabled === false ? 0 : 1,
+    default_bcc: normalizeText(input.default_bcc),
+    default_bcc_enabled: input.default_bcc_enabled === false ? 0 : 1,
+    config_json: JSON.stringify(config)
+  }
+}
+
+/** 비밀값 저장 — IMAP 비밀번호, 임시 OAuth 토큰을 계정 키로 옮기기 */
+function saveAccountSecrets(id: number, input: AccountInput): void {
+  if (input.kind === 'imap' && normalizeText(input.imapPassword)) {
+    setSecret(secretKeys.imap(id), String(input.imapPassword))
+  }
+  if ((input.kind === 'm365' || input.kind === 'gmail') && input.pendingOAuthKey) {
+    const token = getSecret(input.pendingOAuthKey)
+    if (token) {
+      setSecret(secretKeys.oauth(id), token)
+      deleteSecret(input.pendingOAuthKey)
+    }
+  }
+}
+
+export function createAccount(input: AccountInput): Account {
+  const db = getDb()
+  const values = accountValues(input)
+  const cols = Object.keys(values)
+  const id = db.transaction(() => {
+    const noAccounts = (db.prepare('SELECT COUNT(*) c FROM account').get() as { c: number }).c === 0
+    const makeDefault = input.is_default || noAccounts
+    const info = db
+      .prepare(
+        `INSERT INTO account (${cols.join(', ')}, is_default)
+         VALUES (${cols.map((c) => `@${c}`).join(', ')}, @is_default)`
+      )
+      .run({ ...values, is_default: makeDefault ? 1 : 0 })
+    const newId = Number(info.lastInsertRowid)
+    if (makeDefault) db.prepare('UPDATE account SET is_default = 0 WHERE id <> ?').run(newId)
+    return newId
+  })()
+  saveAccountSecrets(id, input)
+  return getAccount(id)!
+}
+
+export function updateAccount(id: number, input: AccountInput): Account {
+  const db = getDb()
+  const existing = getAccount(id)
+  if (!existing) throw new Error('계정을 찾을 수 없습니다')
+  const fixed = { ...input, kind: existing.kind }
+  const values = accountValues(fixed)
+  const sets = Object.keys(values)
+    .map((c) => `${c} = @${c}`)
+    .join(', ')
+  db.transaction(() => {
+    db.prepare(
+      `UPDATE account SET ${sets}, updated_at = datetime('now','localtime') WHERE id = @id`
+    ).run({ ...values, id })
+    if (input.is_default) {
+      db.prepare('UPDATE account SET is_default = CASE WHEN id = ? THEN 1 ELSE 0 END').run(id)
+    }
+  })()
+  saveAccountSecrets(id, fixed)
+  return getAccount(id)!
+}
+
+export function deleteAccount(id: number): void {
+  const db = getDb()
+  db.transaction(() => {
+    const wasDefault = getAccount(id)?.is_default
+    db.prepare('DELETE FROM account WHERE id = ?').run(id)
+    if (wasDefault) {
+      const first = db.prepare('SELECT id FROM account ORDER BY id LIMIT 1').get() as
+        { id: number } | undefined
+      if (first) db.prepare('UPDATE account SET is_default = 1 WHERE id = ?').run(first.id)
+    }
+  })()
+  deleteAccountSecrets(id)
+}
+
+export function setDefaultAccount(id: number): Account[] {
+  getDb().prepare('UPDATE account SET is_default = CASE WHEN id = ? THEN 1 ELSE 0 END').run(id)
+  return listAccounts()
+}
+
+/* ────────────────────────── 설정 (연동 앱) ────────────────────────── */
 
 export function getSettings(): AppSettings {
   const rows = getDb().prepare('SELECT key, value FROM setting').all() as {
@@ -790,15 +972,10 @@ export function getSettings(): AppSettings {
     value: string
   }[]
   const map = new Map(rows.map((r) => [r.key, r.value]))
-  const mode = map.get('outlook_mode')
   return {
-    outlookMode: mode === 'com' || mode === 'eml' ? mode : DEFAULT_SETTINGS.outlookMode,
-    signatureHtml: map.get('signature_html') ?? DEFAULT_SETTINGS.signatureHtml,
-    signatureEnabled: flag(map.get('signature_enabled'), DEFAULT_SETTINGS.signatureEnabled),
-    defaultCc: map.get('default_cc') ?? DEFAULT_SETTINGS.defaultCc,
-    defaultCcEnabled: flag(map.get('default_cc_enabled'), DEFAULT_SETTINGS.defaultCcEnabled),
-    defaultBcc: map.get('default_bcc') ?? DEFAULT_SETTINGS.defaultBcc,
-    defaultBccEnabled: flag(map.get('default_bcc_enabled'), DEFAULT_SETTINGS.defaultBccEnabled)
+    msClientId: map.get('oauth_ms_client_id') ?? '',
+    googleClientId: map.get('oauth_google_client_id') ?? '',
+    hasGoogleClientSecret: hasSecret(secretKeys.googleClientSecret)
   }
 }
 
@@ -807,16 +984,25 @@ export function saveSettings(input: AppSettings): AppSettings {
   const upsert = db.prepare(
     'INSERT INTO setting (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value'
   )
-  const mode =
-    input.outlookMode === 'com' || input.outlookMode === 'eml' ? input.outlookMode : 'auto'
   db.transaction(() => {
-    upsert.run('outlook_mode', mode)
-    upsert.run('signature_html', String(input.signatureHtml ?? ''))
-    upsert.run('signature_enabled', input.signatureEnabled === false ? '0' : '1')
-    upsert.run('default_cc', String(input.defaultCc ?? '').trim())
-    upsert.run('default_cc_enabled', input.defaultCcEnabled === false ? '0' : '1')
-    upsert.run('default_bcc', String(input.defaultBcc ?? '').trim())
-    upsert.run('default_bcc_enabled', input.defaultBccEnabled === false ? '0' : '1')
+    upsert.run('oauth_ms_client_id', normalizeText(input.msClientId))
+    upsert.run('oauth_google_client_id', normalizeText(input.googleClientId))
   })()
+  const secret = input.googleClientSecret
+  if (secret === 'CLEAR') deleteSecret(secretKeys.googleClientSecret)
+  else if (secret && secret.trim()) setSecret(secretKeys.googleClientSecret, secret.trim())
   return getSettings()
+}
+
+/** 어댑터가 쓰는 OAuth 클라이언트 정보 */
+export function oauthClientFor(kind: 'm365' | 'gmail'): {
+  clientId: string
+  clientSecret?: string
+} {
+  const s = getSettings()
+  if (kind === 'm365') return { clientId: s.msClientId }
+  return {
+    clientId: s.googleClientId,
+    clientSecret: getSecret(secretKeys.googleClientSecret) ?? undefined
+  }
 }

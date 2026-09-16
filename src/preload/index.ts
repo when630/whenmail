@@ -1,6 +1,8 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
 import type {
+  Account,
+  AccountInput,
   Activity,
   AppSettings,
   BulkPersonPatch,
@@ -13,6 +15,7 @@ import type {
   ExportFormat,
   ImportParseResult,
   ImportSummary,
+  OAuthResult,
   OcrScanResult,
   Organization,
   OrganizationInput,
@@ -60,6 +63,20 @@ const api: WhenmailApi = {
       ipcRenderer.invoke('activities:addNote', personId, text),
     remove: (id: number): Promise<void> => ipcRenderer.invoke('activities:delete', id)
   },
+  accounts: {
+    list: (): Promise<Account[]> => ipcRenderer.invoke('accounts:list'),
+    get: (id: number): Promise<Account | null> => ipcRenderer.invoke('accounts:get', id),
+    create: (input: AccountInput): Promise<Account> => ipcRenderer.invoke('accounts:create', input),
+    update: (id: number, input: AccountInput): Promise<Account> =>
+      ipcRenderer.invoke('accounts:update', id, input),
+    remove: (id: number): Promise<void> => ipcRenderer.invoke('accounts:delete', id),
+    setDefault: (id: number): Promise<Account[]> => ipcRenderer.invoke('accounts:setDefault', id),
+    connectOAuth: (kind: 'm365' | 'gmail', accountId?: number): Promise<OAuthResult> =>
+      ipcRenderer.invoke('accounts:connectOAuth', kind, accountId),
+    testImap: (input: AccountInput, accountId?: number): Promise<{ draftsPath: string }> =>
+      ipcRenderer.invoke('accounts:testImap', input, accountId),
+    sendTest: (id: number): Promise<DraftResult> => ipcRenderer.invoke('accounts:sendTest', id)
+  },
   tags: {
     list: (): Promise<TagCount[]> => ipcRenderer.invoke('tags:list')
   },
@@ -93,10 +110,10 @@ const api: WhenmailApi = {
   },
   system: {
     version: (): Promise<string> => ipcRenderer.invoke('system:version'),
-    outlookMode: (): Promise<OutlookAdapter> => ipcRenderer.invoke('system:outlookMode'),
     outlookDetected: (): Promise<OutlookAdapter> => ipcRenderer.invoke('system:outlookDetected'),
     openDataFolder: (): Promise<string> => ipcRenderer.invoke('system:openDataFolder'),
-    showInFolder: (path: string): Promise<void> => ipcRenderer.invoke('system:showInFolder', path)
+    showInFolder: (path: string): Promise<void> => ipcRenderer.invoke('system:showInFolder', path),
+    openExternal: (url: string): Promise<void> => ipcRenderer.invoke('system:openExternal', url)
   },
   settings: {
     get: (): Promise<AppSettings> => ipcRenderer.invoke('settings:get'),

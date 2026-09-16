@@ -6,7 +6,7 @@ import type Database from 'better-sqlite3'
  *  v1: contact(명함 1장 = 연락처 1건, 이메일 1개) · template · draft_log · tag · contact_tag · setting
  *  v2: person / email_address(1:N) / organization / business_card(1:N) / person_tag / activity
  */
-export const SCHEMA_VERSION = 2
+export const SCHEMA_VERSION = 3
 
 function tableExists(db: Database.Database, name: string): boolean {
   return Boolean(
@@ -42,7 +42,7 @@ export function migrateDatabase(db: Database.Database, file: string): void {
       version = 1
     } else {
       // 새 DB — 최신 스키마를 바로 만든다
-      createSchemaV2(db)
+      createSchemaLatest(db)
       writeVersion(db, SCHEMA_VERSION)
       return
     }
@@ -56,6 +56,79 @@ export function migrateDatabase(db: Database.Database, file: string): void {
     })()
     version = 2
   }
+  if (version < 3) {
+    db.transaction(() => {
+      migrateV2toV3(db)
+      writeVersion(db, 3)
+    })()
+    version = 3
+  }
+}
+
+/** v3: 계정(발신 프로필) 테이블. 초안 활동에 계정 연결 */
+const V3_TABLES = `
+  CREATE TABLE IF NOT EXISTS account (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL,
+    display_name TEXT NOT NULL DEFAULT '',
+    address TEXT NOT NULL DEFAULT '',
+    signature_html TEXT NOT NULL DEFAULT '',
+    signature_enabled INTEGER NOT NULL DEFAULT 1,
+    default_cc TEXT NOT NULL DEFAULT '',
+    default_cc_enabled INTEGER NOT NULL DEFAULT 1,
+    default_bcc TEXT NOT NULL DEFAULT '',
+    default_bcc_enabled INTEGER NOT NULL DEFAULT 1,
+    is_default INTEGER NOT NULL DEFAULT 0,
+    config_json TEXT NOT NULL DEFAULT '{}',
+    sync_enabled INTEGER NOT NULL DEFAULT 0,
+    last_sync_at TEXT,
+    last_sync_error TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+  );
+`
+
+/**
+ * v2 → v3: 전역 Outlook 연동 설정(연동 방식·서명·참조)을 "이 PC의 Outlook" 계정 1건으로 옮긴다.
+ * 기존 초안 활동은 그 계정에 연결한다.
+ */
+function migrateV2toV3(db: Database.Database): void {
+  db.exec(V3_TABLES)
+  if (!columnExists(db, 'activity', 'account_id')) {
+    db.exec(
+      `ALTER TABLE activity ADD COLUMN account_id INTEGER REFERENCES account(id) ON DELETE SET NULL`
+    )
+  }
+  const rows = db.prepare('SELECT key, value FROM setting').all() as {
+    key: string
+    value: string
+  }[]
+  const map = new Map(rows.map((r) => [r.key, r.value]))
+  const mode = map.get('outlook_mode')
+  const flag = (v: string | undefined, fallback: boolean): number =>
+    v === undefined ? (fallback ? 1 : 0) : v === '1' ? 1 : 0
+  const info = db
+    .prepare(
+      `INSERT INTO account (kind, display_name, address, signature_html, signature_enabled,
+         default_cc, default_cc_enabled, default_bcc, default_bcc_enabled, is_default, config_json)
+       VALUES ('outlook_local', '이 PC의 Outlook', '', ?, ?, ?, ?, ?, ?, 1, ?)`
+    )
+    .run(
+      map.get('signature_html') ?? '',
+      flag(map.get('signature_enabled'), true),
+      map.get('default_cc') ?? '',
+      flag(map.get('default_cc_enabled'), true),
+      map.get('default_bcc') ?? '',
+      flag(map.get('default_bcc_enabled'), true),
+      JSON.stringify({ outlookMode: mode === 'com' || mode === 'eml' ? mode : 'auto' })
+    )
+  db.prepare(`UPDATE activity SET account_id = ? WHERE kind = 'draft'`).run(
+    Number(info.lastInsertRowid)
+  )
+  db.prepare(
+    `DELETE FROM setting WHERE key IN ('outlook_mode','signature_html','signature_enabled',
+     'default_cc','default_cc_enabled','default_bcc','default_bcc_enabled')`
+  ).run()
 }
 
 /** 큰 구조 변경 전에 DB 파일 사본을 남긴다 (whenmail.db.bak-v1). 실패해도 이전은 진행 */
@@ -164,6 +237,15 @@ const COMMON_TABLES = `
 function createSchemaV2(db: Database.Database): void {
   db.exec(COMMON_TABLES)
   db.exec(V2_TABLES)
+}
+
+/** 새 DB: 최신 스키마 전체 */
+function createSchemaLatest(db: Database.Database): void {
+  createSchemaV2(db)
+  db.exec(V3_TABLES)
+  db.exec(
+    `ALTER TABLE activity ADD COLUMN account_id INTEGER REFERENCES account(id) ON DELETE SET NULL`
+  )
 }
 
 /** 무료 메일 도메인 — 회사 도메인 자동 추출에서 제외 */

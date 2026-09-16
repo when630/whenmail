@@ -12,7 +12,7 @@ import {
   XCircle
 } from 'lucide-react'
 import type {
-  AppSettings,
+  Account,
   DraftResult,
   EmailTemplate,
   OutlookAdapter,
@@ -20,6 +20,12 @@ import type {
 } from '../../../shared/types'
 import { isHtmlBody, renderTemplate } from '../../../shared/render'
 import { invalidAddresses, parseAddressList } from '../../../shared/address'
+import {
+  ACCOUNT_KIND_LABEL,
+  accountLabel,
+  capabilitiesOf,
+  draftButtonLabel
+} from '../../../shared/accounts'
 import { useDialog } from '../components/dialogs'
 
 interface Props {
@@ -29,6 +35,25 @@ interface Props {
   onClose: () => void
 }
 
+const LAST_ACCOUNT_KEY = 'compose-last-account'
+
+function readLastAccount(): number | null {
+  try {
+    const v = Number(localStorage.getItem(LAST_ACCOUNT_KEY))
+    return v > 0 ? v : null
+  } catch {
+    return null
+  }
+}
+
+/** 결과 안내 — 어댑터별로 초안이 어디에 생겼는지 */
+const RESULT_HINT: Record<Account['kind'], string> = {
+  outlook_local: 'Outlook에서 각 초안을 확인한 뒤 직접 전송하세요.',
+  m365: '웹 Outlook이 열렸습니다. 초안 폴더에서 내용을 확인한 뒤 직접 전송하세요.',
+  gmail: 'Gmail 웹이 열렸습니다. 임시보관함에서 내용을 확인한 뒤 직접 전송하세요.',
+  imap: '메일 서버의 초안 폴더에 저장되었습니다. 사용하는 메일 클라이언트에서 초안을 열어 전송하세요.'
+}
+
 export default function ComposeModal({
   people,
   initialTemplateId,
@@ -36,13 +61,14 @@ export default function ComposeModal({
 }: Props): React.JSX.Element {
   const [templates, setTemplates] = useState<EmailTemplate[] | null>(null)
   const [templateId, setTemplateId] = useState<number | null>(null)
+  const [accounts, setAccounts] = useState<Account[] | null>(null)
+  const [accountId, setAccountId] = useState<number | null>(null)
+  const [detected, setDetected] = useState<OutlookAdapter | null>(null)
   const [previewIdx, setPreviewIdx] = useState(0)
   const [cc, setCc] = useState('')
   const [bcc, setBcc] = useState('')
   const [addressBook, setAddressBook] = useState<string[]>([])
-  const [settings, setSettings] = useState<AppSettings | null>(null)
   const [includeSignature, setIncludeSignature] = useState(true)
-  const [outlookMode, setOutlookMode] = useState<OutlookAdapter | null>(null)
   const [sending, setSending] = useState(false)
   const [results, setResults] = useState<DraftResult[] | null>(null)
   /** 사람별로 이번에 보낼 주소 (기본: 대표 주소) */
@@ -51,25 +77,30 @@ export default function ComposeModal({
   )
   const { toast } = useDialog()
 
+  /** 계정을 고르면 그 계정의 기본 참조·서명 여부로 칸을 채운다 */
+  const applyAccount = (a: Account): void => {
+    setAccountId(a.id)
+    setCc(a.default_cc_enabled ? a.default_cc : '')
+    setBcc(a.default_bcc_enabled ? a.default_bcc : '')
+    setIncludeSignature(a.signature_enabled)
+  }
+
   useEffect(() => {
     window.api.templates.list().then((list) => {
       setTemplates(list)
       const preferred = list.find((t) => t.id === initialTemplateId) ?? list[0]
       if (preferred) setTemplateId(preferred.id)
     })
-    // 설정의 기본 참조/숨은 참조(켜진 것만)로 미리 채우고, 서명 포함 여부도 설정을 따른다
-    window.api.settings
-      .get()
-      .then((s) => {
-        setSettings(s)
-        if (s.defaultCcEnabled) setCc(s.defaultCc)
-        if (s.defaultBccEnabled) setBcc(s.defaultBcc)
-        setIncludeSignature(s.signatureEnabled)
-      })
-      .catch(() => undefined)
+    window.api.accounts.list().then((list) => {
+      setAccounts(list)
+      const last = readLastAccount()
+      const pick =
+        list.find((a) => a.id === last && a.connected) ?? list.find((a) => a.is_default) ?? list[0]
+      if (pick) applyAccount(pick)
+    })
     window.api.system
-      .outlookMode()
-      .then(setOutlookMode)
+      .outlookDetected()
+      .then(setDetected)
       .catch(() => undefined)
     // 참조 입력 자동완성용 — 등록된 모든 주소
     window.api.people
@@ -80,6 +111,18 @@ export default function ComposeModal({
       .catch(() => undefined)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  const account = useMemo(
+    () => accounts?.find((a) => a.id === accountId) ?? null,
+    [accounts, accountId]
+  )
+  const localMode: OutlookAdapter | null =
+    account?.kind === 'outlook_local'
+      ? account.config.outlookMode === 'com' || account.config.outlookMode === 'eml'
+        ? account.config.outlookMode
+        : detected
+      : null
+  const caps = account ? capabilitiesOf(account.kind, localMode) : null
 
   const targets = useMemo(() => people.filter((p) => p.emails.length > 0), [people])
   const skipped = people.length - targets.length
@@ -95,7 +138,7 @@ export default function ComposeModal({
   const ccInvalid = useMemo(() => invalidAddresses(cc), [cc])
   const bccInvalid = useMemo(() => invalidAddresses(bcc), [bcc])
   const addressError = ccInvalid.length > 0 || bccInvalid.length > 0
-  const hasSignature = Boolean(settings?.signatureHtml.trim())
+  const hasSignature = Boolean(account?.signature_html.trim())
   const attachments = template?.attachments ?? []
 
   const preview = useMemo(() => {
@@ -107,14 +150,24 @@ export default function ComposeModal({
   }, [template, previewPerson, previewEmail])
 
   const createDrafts = async (): Promise<void> => {
-    if (!template || addressError) return
+    if (!template || !account || addressError) return
     setSending(true)
     try {
+      try {
+        localStorage.setItem(LAST_ACCOUNT_KEY, String(account.id))
+      } catch {
+        /* 무시 */
+      }
       setResults(
         await window.api.drafts.create(
           targets.map((p) => ({ personId: p.id, email: chosen[p.id] || p.email })),
           template.id,
-          { cc, bcc, includeSignature: hasSignature ? includeSignature : undefined }
+          {
+            accountId: account.id,
+            cc,
+            bcc,
+            includeSignature: hasSignature ? includeSignature : undefined
+          }
         )
       )
     } catch (e) {
@@ -145,22 +198,30 @@ export default function ComposeModal({
                 >
                   {r.ok ? <CheckCircle2 size={16} /> : <XCircle size={16} />}
                   {r.personName}
-                  {r.ok ? ` — 초안 열림 (${r.adapter})` : ` — ${r.error}`}
+                  {r.ok ? ` — 초안 생성 (${r.adapter})` : ` — ${r.error}`}
                 </li>
               ))}
             </ul>
-            <p className="hint">Outlook에서 각 초안을 확인한 뒤 직접 전송하세요.</p>
+            <p className="hint">{account ? RESULT_HINT[account.kind] : ''}</p>
             <div className="modal-actions">
               <button className="btn primary" onClick={onClose}>
                 닫기
               </button>
             </div>
           </div>
-        ) : templates === null ? null : templates.length === 0 ? (
+        ) : templates === null || accounts === null ? null : templates.length === 0 ? (
           <div className="empty">
             <MailX size={32} strokeWidth={1.4} />
             <span className="empty-title">템플릿이 없습니다</span>
             <span>템플릿 메뉴에서 먼저 템플릿을 만들어 주세요.</span>
+          </div>
+        ) : accounts.length === 0 ? (
+          <div className="empty">
+            <MailX size={32} strokeWidth={1.4} />
+            <span className="empty-title">보낼 계정이 없습니다</span>
+            <span>
+              설정 &gt; 계정에서 Outlook, Microsoft 365, Gmail 또는 IMAP 계정을 추가하세요.
+            </span>
           </div>
         ) : (
           <>
@@ -178,11 +239,35 @@ export default function ComposeModal({
                   ))}
                 </select>
               </label>
+              <label className="form-field">
+                <span>보낼 계정</span>
+                <select
+                  value={accountId ?? ''}
+                  onChange={(e) => {
+                    const a = accounts.find((x) => x.id === Number(e.target.value))
+                    if (a) applyAccount(a)
+                  }}
+                >
+                  {accounts.map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {accountLabel(a)} — {ACCOUNT_KIND_LABEL[a.kind]}
+                      {a.connected ? '' : ' (재연결 필요)'}
+                    </option>
+                  ))}
+                </select>
+              </label>
               <div className="compose-recipients">
                 받는 사람 {targets.length}명
                 {skipped > 0 && <span className="badge warn">이메일 없는 {skipped}명 제외</span>}
               </div>
             </div>
+
+            {account && !account.connected && (
+              <p className="settings-warn">
+                <TriangleAlert size={14} />이 계정은 다시 연결해야 합니다. 설정 &gt; 계정에서 연결한
+                뒤 다시 시도하세요.
+              </p>
+            )}
 
             <div className="compose-cc">
               <label className="form-field">
@@ -233,7 +318,7 @@ export default function ComposeModal({
                   checked={includeSignature}
                   onChange={(e) => setIncludeSignature(e.target.checked)}
                 />
-                <span>본문 아래에 서명 붙이기</span>
+                <span>본문 아래에 계정 서명 붙이기</span>
               </label>
             )}
 
@@ -263,6 +348,18 @@ export default function ComposeModal({
 
             {preview && previewPerson && (
               <div className="preview">
+                {account && (
+                  <div className="preview-row">
+                    <span className="preview-label">보내는 사람</span>
+                    <span className="preview-from">
+                      {accountLabel(account)}
+                      <span className={`badge kind-${account.kind}`}>
+                        {ACCOUNT_KIND_LABEL[account.kind]}
+                        {localMode ? ` · ${localMode}` : ''}
+                      </span>
+                    </span>
+                  </div>
+                )}
                 <div className="preview-row">
                   <span className="preview-label">받는 사람</span>
                   <span className="preview-to">
@@ -326,15 +423,24 @@ export default function ComposeModal({
                 ) : (
                   <pre className="preview-body">{preview.body.text}</pre>
                 )}
-                {attachments.length > 0 && outlookMode === 'eml' && (
-                  <ul className="warning-list">
+                {caps && (
+                  <ul className="warning-list caps-inline">
                     <li>
-                      <TriangleAlert size={14} />
-                      <span>
-                        새 Outlook은 .eml 초안을 열 때 첨부를 놓치는 경우가 보고되어 있습니다.
-                        초안에서 첨부가 보이는지 확인하세요.
-                      </span>
+                      <span className="caps-label">초안</span>
+                      <span>{caps.opens}</span>
                     </li>
+                    {caps.warning && (
+                      <li>
+                        <TriangleAlert size={14} />
+                        <span>{caps.warning}</span>
+                      </li>
+                    )}
+                    {attachments.length > 0 && !caps.attachments && (
+                      <li>
+                        <TriangleAlert size={14} />
+                        <span>이 경로는 첨부를 전달하지 못합니다.</span>
+                      </li>
+                    )}
                   </ul>
                 )}
                 {preview.warnings.length > 0 && (
@@ -362,7 +468,14 @@ export default function ComposeModal({
               <button
                 className="btn primary"
                 onClick={createDrafts}
-                disabled={sending || !template || targets.length === 0 || addressError}
+                disabled={
+                  sending ||
+                  !template ||
+                  !account ||
+                  !account.connected ||
+                  targets.length === 0 ||
+                  addressError
+                }
               >
                 {sending ? (
                   <>
@@ -372,7 +485,8 @@ export default function ComposeModal({
                 ) : (
                   <>
                     <SendHorizontal size={15} />
-                    Outlook 초안 열기{targets.length > 1 ? ` (${targets.length}건)` : ''}
+                    {account ? draftButtonLabel(account.kind) : '초안 만들기'}
+                    {targets.length > 1 ? ` (${targets.length}건)` : ''}
                   </>
                 )}
               </button>

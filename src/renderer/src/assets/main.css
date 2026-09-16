@@ -2670,3 +2670,272 @@ input[type='radio'] {
   padding: 3px 8px;
   font-size: 12.5px;
 }
+
+/* ---------- v3: 계정 ---------- */
+.account-list {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.account-list li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13.5px;
+}
+
+.account-list li:last-child {
+  border-bottom: none;
+}
+
+.account-list li.is-default {
+  background: var(--primary-soft);
+}
+
+.account-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.account-main strong {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.account-main small {
+  font-size: 12px;
+}
+
+.account-default-badge {
+  gap: 3px;
+}
+
+.badge.kind-outlook_local {
+  background: var(--primary-soft);
+  color: var(--primary-soft-text);
+}
+
+.badge.kind-m365 {
+  background: #e0f2fe;
+  color: #075985;
+}
+
+.badge.kind-gmail {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.badge.kind-imap {
+  background: #ecfdf3;
+  color: var(--success);
+}
+
+[data-theme='dark'] .badge.kind-m365 {
+  background: rgba(14, 165, 233, 0.16);
+  color: #7dd3fc;
+}
+
+[data-theme='dark'] .badge.kind-gmail {
+  background: rgba(248, 113, 113, 0.16);
+  color: #fca5a5;
+}
+
+[data-theme='dark'] .badge.kind-imap {
+  background: var(--success-soft);
+}
+
+.badge.mode-graph {
+  background: #e0f2fe;
+  color: #075985;
+}
+
+.badge.mode-gmail {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.badge.mode-imap {
+  background: var(--success-soft);
+  color: var(--success);
+}
+
+[data-theme='dark'] .badge.mode-graph {
+  background: rgba(14, 165, 233, 0.16);
+  color: #7dd3fc;
+}
+
+[data-theme='dark'] .badge.mode-gmail {
+  background: rgba(248, 113, 113, 0.16);
+  color: #fca5a5;
+}
+
+.kind-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.kind-card {
+  font: inherit;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  transition:
+    border-color var(--ease),
+    background var(--ease);
+}
+
+.kind-card:hover {
+  background: var(--surface-sunken);
+}
+
+.kind-card.chosen {
+  border-color: var(--primary);
+  background: var(--primary-soft);
+}
+
+.kind-card strong {
+  font-size: 13.5px;
+}
+
+.kind-card .muted {
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.account-kind-line {
+  margin: 0 0 12px;
+  font-size: 13px;
+}
+
+.account-connect {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  margin-bottom: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-sunken);
+}
+
+.oauth-box {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.oauth-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.imap-port-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.imap-port-row input[type='number'] {
+  width: 110px;
+}
+
+.option-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.imap-test {
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+}
+
+.test-ok,
+.test-fail {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+}
+
+.test-ok {
+  color: var(--success);
+}
+
+.test-fail {
+  color: var(--danger);
+}
+
+.caps-list {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12.5px;
+}
+
+.caps-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.caps-label {
+  font-weight: 600;
+  color: var(--text-secondary);
+  min-width: 56px;
+}
+
+.caps-warning {
+  color: var(--warn);
+}
+
+.caps-inline li {
+  align-items: center;
+}
+
+.account-default {
+  align-self: end;
+}
+
+.link-btn {
+  font: inherit;
+  font-size: 12px;
+  border: none;
+  background: none;
+  color: var(--primary);
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
+}
+
+.preview-from {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
