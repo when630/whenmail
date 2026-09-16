@@ -199,7 +199,7 @@ export default function SettingsView({
     const ok = await confirm({
       title: '백업에서 복원',
       message:
-        '복원하면 현재 명함·템플릿·이력이 백업 파일 내용으로 교체되고 앱이 다시 시작됩니다.\n계속할까요?',
+        '복원하면 현재 사람·회사·템플릿·활동이 백업 파일 내용으로 교체되고 앱이 다시 시작됩니다.\n계속할까요?',
       confirmLabel: '복원',
       danger: true
     })
@@ -411,7 +411,7 @@ export default function SettingsView({
           데이터
         </h2>
         <p className="muted">
-          명함·템플릿·이력·명함 이미지·설정은 이 PC의 로컬 데이터 폴더에만 저장됩니다.
+          사람·회사·템플릿·활동·명함 이미지·설정은 이 PC의 로컬 데이터 폴더에만 저장됩니다.
         </p>
         <div className="settings-actions">
           <button className="btn" onClick={() => window.api.system.openDataFolder()}>

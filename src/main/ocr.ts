@@ -72,12 +72,9 @@ export async function pickAndScanCard(): Promise<OcrScanResult | null> {
   fs.copyFileSync(src, dest)
 
   const worker = await getWorker()
-  const {
-    data
-  } = await worker.recognize(dest, {}, { blocks: true, text: true })
+  const { data } = await worker.recognize(dest, {}, { blocks: true, text: true })
   const lines = extractLines(data as Parameters<typeof extractLines>[0])
   const fields = parseCardLines(lines)
-  fields.card_image_path = dest
 
   return {
     fields,

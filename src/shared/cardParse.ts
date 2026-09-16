@@ -1,4 +1,4 @@
-import type { ContactInput } from './types'
+import type { PersonInput } from './types'
 
 export interface OcrLine {
   text: string
@@ -74,20 +74,20 @@ function normalizePhone(raw: string): string {
 }
 
 /** OCR 라인들에서 명함 필드를 추정한다. 확신 없는 필드는 빈 값으로 남긴다. */
-export function parseCardLines(ocrLines: OcrLine[]): Partial<ContactInput> {
+export function parseCardLines(ocrLines: OcrLine[]): Partial<PersonInput> {
   const lines = ocrLines
     .map((l) => ({ ...l, text: l.text.replace(/\s+/g, ' ').trim() }))
     .filter((l) => l.text.length > 0)
 
-  const out: Partial<ContactInput> = {}
+  const out: Partial<PersonInput> = {}
   const consumed = new Set<number>()
 
   for (const [i, line] of lines.entries()) {
     // 이메일
-    if (!out.email) {
+    if (!out.emails) {
       const m = line.text.match(EMAIL_RE)
       if (m) {
-        out.email = m[0].toLowerCase()
+        out.emails = [m[0].toLowerCase()]
         consumed.add(i)
       }
     }
@@ -128,7 +128,11 @@ export function parseCardLines(ocrLines: OcrLine[]): Partial<ContactInput> {
       if (!line.text.includes(title)) continue
       out.title = title
       consumed.add(i)
-      const rest = line.text.replace(title, '').replace(/[|/·,]/g, ' ').replace(/\s+/g, ' ').trim()
+      const rest = line.text
+        .replace(title, '')
+        .replace(/[|/·,]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
       if (!out.name && HANGUL_NAME_RE.test(rest)) {
         out.name = rest
       } else if (rest && DEPT_HINTS.some((h) => rest.includes(h))) {
@@ -162,10 +166,7 @@ export function parseCardLines(ocrLines: OcrLine[]): Partial<ContactInput> {
   if (!out.name) {
     const candidates = lines
       .map((l, i) => ({ ...l, i }))
-      .filter(
-        (l) =>
-          !consumed.has(l.i) && HANGUL_NAME_RE.test(l.text) && !TITLES.includes(l.text)
-      )
+      .filter((l) => !consumed.has(l.i) && HANGUL_NAME_RE.test(l.text) && !TITLES.includes(l.text))
     if (candidates.length > 0) {
       candidates.sort((a, b) => (b.height ?? 0) - (a.height ?? 0))
       out.name = candidates[0].text

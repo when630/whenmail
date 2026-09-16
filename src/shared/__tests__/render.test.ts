@@ -1,9 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { bodyToHtml, bodyToHtmlFragment, htmlToText, isHtmlBody, renderTemplate } from '../render'
-import type { Contact } from '../types'
+import type { TemplateData } from '../render'
 
-const contact: Contact = {
-  id: 1,
+const contact: TemplateData = {
   name: '김서연',
   company: '한빛물산',
   department: '구매팀',
@@ -13,11 +12,7 @@ const contact: Contact = {
   mobile: '010-1234-5678',
   address: '서울 중구',
   website: 'hanbit.example',
-  memo: '',
-  card_image_path: '',
-  tags: [],
-  created_at: '',
-  updated_at: ''
+  memo: ''
 }
 
 describe('renderTemplate', () => {

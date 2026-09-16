@@ -13,24 +13,24 @@ import {
 } from 'lucide-react'
 import type {
   AppSettings,
-  Contact,
   DraftResult,
   EmailTemplate,
-  OutlookAdapter
+  OutlookAdapter,
+  Person
 } from '../../../shared/types'
 import { isHtmlBody, renderTemplate } from '../../../shared/render'
 import { invalidAddresses, parseAddressList } from '../../../shared/address'
 import { useDialog } from '../components/dialogs'
 
 interface Props {
-  contacts: Contact[]
+  people: Person[]
   /** 팔레트에서 미리 고른 템플릿 — 목록에 있으면 기본 선택 */
   initialTemplateId?: number
   onClose: () => void
 }
 
 export default function ComposeModal({
-  contacts,
+  people,
   initialTemplateId,
   onClose
 }: Props): React.JSX.Element {
@@ -45,6 +45,10 @@ export default function ComposeModal({
   const [outlookMode, setOutlookMode] = useState<OutlookAdapter | null>(null)
   const [sending, setSending] = useState(false)
   const [results, setResults] = useState<DraftResult[] | null>(null)
+  /** 사람별로 이번에 보낼 주소 (기본: 대표 주소) */
+  const [chosen, setChosen] = useState<Record<number, string>>(() =>
+    Object.fromEntries(people.map((p) => [p.id, p.email]))
+  )
   const { toast } = useDialog()
 
   useEffect(() => {
@@ -67,21 +71,24 @@ export default function ComposeModal({
       .outlookMode()
       .then(setOutlookMode)
       .catch(() => undefined)
-    // 참조 입력 자동완성용 — 이메일 있는 명함만
-    window.api.contacts
+    // 참조 입력 자동완성용 — 등록된 모든 주소
+    window.api.people
       .list()
-      .then((all) => setAddressBook(all.filter((c) => c.email.trim()).map((c) => c.email.trim())))
+      .then((all) =>
+        setAddressBook([...new Set(all.flatMap((p) => p.emails.map((e) => e.address)))])
+      )
       .catch(() => undefined)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const targets = useMemo(() => contacts.filter((c) => c.email.trim()), [contacts])
-  const skipped = contacts.length - targets.length
+  const targets = useMemo(() => people.filter((p) => p.emails.length > 0), [people])
+  const skipped = people.length - targets.length
   const template = useMemo(
     () => templates?.find((t) => t.id === templateId) ?? null,
     [templates, templateId]
   )
-  const previewContact = targets[Math.min(previewIdx, targets.length - 1)] ?? null
+  const previewPerson = targets[Math.min(previewIdx, targets.length - 1)] ?? null
+  const previewEmail = previewPerson ? chosen[previewPerson.id] || previewPerson.email : ''
 
   const ccList = useMemo(() => parseAddressList(cc), [cc])
   const bccList = useMemo(() => parseAddressList(bcc), [bcc])
@@ -92,11 +99,12 @@ export default function ComposeModal({
   const attachments = template?.attachments ?? []
 
   const preview = useMemo(() => {
-    if (!template || !previewContact) return null
-    const subject = renderTemplate(template.subject_tpl, previewContact)
-    const body = renderTemplate(template.body_tpl, previewContact)
+    if (!template || !previewPerson) return null
+    const data = { ...previewPerson, email: previewEmail }
+    const subject = renderTemplate(template.subject_tpl, data)
+    const body = renderTemplate(template.body_tpl, data)
     return { subject, body, warnings: [...subject.warnings, ...body.warnings] }
-  }, [template, previewContact])
+  }, [template, previewPerson, previewEmail])
 
   const createDrafts = async (): Promise<void> => {
     if (!template || addressError) return
@@ -104,7 +112,7 @@ export default function ComposeModal({
     try {
       setResults(
         await window.api.drafts.create(
-          targets.map((c) => c.id),
+          targets.map((p) => ({ personId: p.id, email: chosen[p.id] || p.email })),
           template.id,
           { cc, bcc, includeSignature: hasSignature ? includeSignature : undefined }
         )
@@ -131,12 +139,12 @@ export default function ComposeModal({
             <ul className="result-list">
               {results.map((r, i) => (
                 <li
-                  key={r.contactId}
+                  key={r.personId}
                   className={r.ok ? 'ok' : 'fail'}
                   style={{ animationDelay: `${Math.min(i, 14) * 40}ms` }}
                 >
                   {r.ok ? <CheckCircle2 size={16} /> : <XCircle size={16} />}
-                  {r.contactName}
+                  {r.personName}
                   {r.ok ? ` — 초안 열림 (${r.adapter})` : ` — ${r.error}`}
                 </li>
               ))}
@@ -240,7 +248,7 @@ export default function ComposeModal({
                   <ChevronLeft size={15} />
                 </button>
                 <span>
-                  미리보기 {previewIdx + 1} / {targets.length} — {previewContact?.name}
+                  미리보기 {previewIdx + 1} / {targets.length} — {previewPerson?.name}
                 </span>
                 <button
                   className="btn ghost sm icon-only"
@@ -253,12 +261,31 @@ export default function ComposeModal({
               </div>
             )}
 
-            {preview && previewContact && (
+            {preview && previewPerson && (
               <div className="preview">
                 <div className="preview-row">
                   <span className="preview-label">받는 사람</span>
-                  <span>
-                    {previewContact.name} &lt;{previewContact.email}&gt;
+                  <span className="preview-to">
+                    {previewPerson.name}
+                    {previewPerson.emails.length > 1 ? (
+                      <select
+                        className="inline-select"
+                        aria-label={`${previewPerson.name}에게 보낼 주소`}
+                        value={previewEmail}
+                        onChange={(e) =>
+                          setChosen((c) => ({ ...c, [previewPerson.id]: e.target.value }))
+                        }
+                      >
+                        {previewPerson.emails.map((e) => (
+                          <option key={e.id} value={e.address}>
+                            {e.address}
+                            {e.label ? ` (${e.label})` : ''}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <span> &lt;{previewEmail}&gt;</span>
+                    )}
                   </span>
                 </div>
                 {ccList.length > 0 && (

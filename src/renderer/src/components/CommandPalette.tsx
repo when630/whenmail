@@ -1,26 +1,27 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Contact as ContactIcon,
+  Activity as ActivityIcon,
   CornerDownLeft,
+  Building2,
   FolderOpen,
-  History,
   Mail,
   Plus,
   Search,
   SendHorizontal,
   Settings,
-  Upload
+  Upload,
+  Users
 } from 'lucide-react'
-import type { Contact, EmailTemplate } from '../../../shared/types'
+import type { EmailTemplate, Person } from '../../../shared/types'
 import Avatar from './Avatar'
 
-export type ViewKey = 'contacts' | 'templates' | 'history' | 'settings'
+export type ViewKey = 'people' | 'companies' | 'templates' | 'activity' | 'settings'
 
 interface Props {
   onClose: () => void
   onNavigate: (view: ViewKey) => void
-  onCompose: (contact: Contact, templateId: number) => void
-  onNewContact: () => void
+  onCompose: (person: Person, templateId: number) => void
+  onNewPerson: () => void
   onImport: () => void
 }
 
@@ -33,10 +34,10 @@ interface ActionItem {
   run: () => void
 }
 
-interface ContactItem {
-  kind: 'contact'
+interface PersonItem {
+  kind: 'person'
   id: string
-  contact: Contact
+  person: Person
 }
 
 interface TemplateItem {
@@ -45,24 +46,24 @@ interface TemplateItem {
   template: EmailTemplate
 }
 
-type Item = ActionItem | ContactItem | TemplateItem
+type Item = ActionItem | PersonItem | TemplateItem
 
 export default function CommandPalette({
   onClose,
   onNavigate,
   onCompose,
-  onNewContact,
+  onNewPerson,
   onImport
 }: Props): React.JSX.Element {
   const [query, setQuery] = useState('')
-  const [contacts, setContacts] = useState<Contact[]>([])
+  const [people, setPeople] = useState<Person[]>([])
   const [templates, setTemplates] = useState<EmailTemplate[] | null>(null)
-  const [pickedContact, setPickedContact] = useState<Contact | null>(null)
+  const [picked, setPicked] = useState<Person | null>(null)
   const [activeIdx, setActiveIdx] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
 
-  const step: 'root' | 'template' = pickedContact ? 'template' : 'root'
+  const step: 'root' | 'template' = picked ? 'template' : 'root'
 
   useEffect(() => {
     inputRef.current?.focus()
@@ -71,9 +72,11 @@ export default function CommandPalette({
   useEffect(() => {
     if (step !== 'root') return
     const t = setTimeout(async () => {
-      // 검색어가 없으면 최근 사용 명함을 기본으로 보여준다
-      setContacts(
-        query.trim() ? await window.api.contacts.list(query) : await window.api.contacts.recent(5)
+      // 검색어가 없으면 최근 연락한 사람을 기본으로 보여준다
+      setPeople(
+        query.trim()
+          ? await window.api.people.list({ search: query })
+          : await window.api.people.recent(5)
       )
     }, 80)
     return () => clearTimeout(t)
@@ -90,11 +93,11 @@ export default function CommandPalette({
     const all: ActionItem[] = [
       {
         kind: 'action',
-        id: 'new-contact',
-        label: '명함 등록',
-        hint: '새 명함을 추가합니다',
+        id: 'new-person',
+        label: '사람 등록',
+        hint: '새 사람(명함)을 추가합니다',
         Icon: Plus,
-        run: onNewContact
+        run: onNewPerson
       },
       {
         kind: 'action',
@@ -106,11 +109,19 @@ export default function CommandPalette({
       },
       {
         kind: 'action',
-        id: 'go-contacts',
-        label: '명함으로 이동',
-        hint: '명함 목록',
-        Icon: ContactIcon,
-        run: () => onNavigate('contacts')
+        id: 'go-people',
+        label: '사람으로 이동',
+        hint: '사람 목록',
+        Icon: Users,
+        run: () => onNavigate('people')
+      },
+      {
+        kind: 'action',
+        id: 'go-companies',
+        label: '회사로 이동',
+        hint: '회사별 소속 사람',
+        Icon: Building2,
+        run: () => onNavigate('companies')
       },
       {
         kind: 'action',
@@ -122,11 +133,11 @@ export default function CommandPalette({
       },
       {
         kind: 'action',
-        id: 'go-history',
-        label: '이력으로 이동',
-        hint: '초안 생성 기록',
-        Icon: History,
-        run: () => onNavigate('history')
+        id: 'go-activity',
+        label: '활동으로 이동',
+        hint: '초안·메모 타임라인',
+        Icon: ActivityIcon,
+        run: () => onNavigate('activity')
       },
       {
         kind: 'action',
@@ -148,12 +159,12 @@ export default function CommandPalette({
     const q = query.trim().toLowerCase()
     if (!q) return all
     return all.filter((a) => a.label.toLowerCase().includes(q))
-  }, [step, query, onNavigate, onNewContact])
+  }, [step, query, onNavigate, onNewPerson, onImport])
 
-  const contactItems = useMemo<ContactItem[]>(() => {
+  const personItems = useMemo<PersonItem[]>(() => {
     if (step !== 'root') return []
-    return contacts.slice(0, 6).map((c) => ({ kind: 'contact', id: `contact-${c.id}`, contact: c }))
-  }, [step, contacts])
+    return people.slice(0, 6).map((p) => ({ kind: 'person', id: `person-${p.id}`, person: p }))
+  }, [step, people])
 
   const templateItems = useMemo<TemplateItem[]>(() => {
     if (step !== 'template' || templates === null) return []
@@ -167,20 +178,20 @@ export default function CommandPalette({
   }, [step, templates, query])
 
   const items = useMemo<Item[]>(
-    () => (step === 'root' ? [...contactItems, ...actions] : templateItems),
-    [step, contactItems, actions, templateItems]
+    () => (step === 'root' ? [...personItems, ...actions] : templateItems),
+    [step, personItems, actions, templateItems]
   )
 
   useEffect(() => {
     setActiveIdx(0)
   }, [query, step])
 
-  const pickContact = (contact: Contact): void => {
-    if (contact.email.trim()) {
-      setPickedContact(contact)
+  const pickPerson = (person: Person): void => {
+    if (person.email.trim()) {
+      setPicked(person)
       setQuery('')
     } else {
-      onNavigate('contacts')
+      onNavigate('people')
       onClose()
     }
   }
@@ -189,10 +200,10 @@ export default function CommandPalette({
     if (item.kind === 'action') {
       item.run()
       onClose()
-    } else if (item.kind === 'contact') {
-      pickContact(item.contact)
-    } else if (pickedContact) {
-      onCompose(pickedContact, item.template.id)
+    } else if (item.kind === 'person') {
+      pickPerson(item.person)
+    } else if (picked) {
+      onCompose(picked, item.template.id)
       onClose()
     }
   }
@@ -212,7 +223,7 @@ export default function CommandPalette({
       onClose()
     } else if (e.key === 'Backspace' && query === '' && step === 'template') {
       e.preventDefault()
-      setPickedContact(null)
+      setPicked(null)
     }
   }
 
@@ -234,35 +245,33 @@ export default function CommandPalette({
       >
         <div className="palette-input">
           <Search size={17} />
-          {pickedContact && (
+          {picked && (
             <button
               className="palette-crumb"
               title="다시 선택 (Backspace)"
-              onClick={() => setPickedContact(null)}
+              onClick={() => setPicked(null)}
             >
-              <Avatar name={pickedContact.name} />
-              {pickedContact.name}
+              <Avatar name={picked.name} />
+              {picked.name}
             </button>
           )}
           <input
             ref={inputRef}
             value={query}
-            placeholder={
-              step === 'root' ? '이름·회사 검색 또는 명령 실행…' : '보낼 템플릿 검색…'
-            }
+            placeholder={step === 'root' ? '이름·회사 검색 또는 명령 실행…' : '보낼 템플릿 검색…'}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={onKeyDown}
           />
           <kbd>Esc</kbd>
         </div>
         <div className="palette-list" ref={listRef}>
-          {step === 'root' && contactItems.length > 0 && (
-            <div className="palette-group">{query.trim() ? '명함' : '최근 명함'}</div>
+          {step === 'root' && personItems.length > 0 && (
+            <div className="palette-group">{query.trim() ? '사람' : '최근 연락한 사람'}</div>
           )}
-          {contactItems.map((item) => {
+          {personItems.map((item) => {
             idx += 1
             const i = idx
-            const c = item.contact
+            const c = item.person
             const hasEmail = Boolean(c.email.trim())
             return (
               <button
@@ -313,7 +322,7 @@ export default function CommandPalette({
             )
           })}
           {step === 'template' && templateItems.length > 0 && (
-            <div className="palette-group">템플릿 — {pickedContact?.name}님에게 보낼 메일</div>
+            <div className="palette-group">템플릿 — {picked?.name}님에게 보낼 메일</div>
           )}
           {templateItems.map((item) => {
             idx += 1

@@ -1,8 +1,8 @@
 import { useState } from 'react'
 import { Loader2, X } from 'lucide-react'
-import type { BulkContactPatch } from '../../../shared/types'
+import type { BulkPersonPatch } from '../../../shared/types'
 
-type BulkField = keyof BulkContactPatch['fields']
+type BulkField = keyof BulkPersonPatch['fields']
 
 const FIELDS: { key: BulkField; label: string; placeholder?: string }[] = [
   { key: 'company', label: '회사' },
@@ -13,23 +13,23 @@ const FIELDS: { key: BulkField; label: string; placeholder?: string }[] = [
   { key: 'website', label: '웹사이트' }
 ]
 
-const TAG_MODES: { value: NonNullable<BulkContactPatch['tags']>['mode']; label: string }[] = [
+const TAG_MODES: { value: NonNullable<BulkPersonPatch['tags']>['mode']; label: string }[] = [
   { value: 'add', label: '추가' },
   { value: 'remove', label: '제거' },
   { value: 'replace', label: '교체' }
 ]
 
 interface Props {
-  /** 대상 명함 수 */
+  /** 대상 사람 수 */
   count: number
   /** 태그 입력 자동완성용 */
   tagOptions: string[]
-  onApply: (patch: BulkContactPatch) => Promise<void>
+  onApply: (patch: BulkPersonPatch) => Promise<void>
   onClose: () => void
 }
 
 /**
- * 여러 명함에 공통 값을 한 번에 적용하는 모달.
+ * 여러 사람에 공통 값을 한 번에 적용하는 모달.
  * "변경" 체크를 켠 필드만 덮어쓴다 — 체크만 켜고 비워 두면 그 필드를 비운다.
  * 이름·이메일·휴대폰·메모는 사람마다 다르므로 일괄 수정 대상에서 제외.
  */
@@ -49,7 +49,7 @@ export default function BulkEditModal({
     website: ''
   })
   const [tagsEnabled, setTagsEnabled] = useState(false)
-  const [tagMode, setTagMode] = useState<NonNullable<BulkContactPatch['tags']>['mode']>('add')
+  const [tagMode, setTagMode] = useState<NonNullable<BulkPersonPatch['tags']>['mode']>('add')
   const [tagsText, setTagsText] = useState('')
   const [saving, setSaving] = useState(false)
 
@@ -69,7 +69,7 @@ export default function BulkEditModal({
   const submit = async (e: React.FormEvent): Promise<void> => {
     e.preventDefault()
     if (!canApply) return
-    const patch: BulkContactPatch = { fields: {} }
+    const patch: BulkPersonPatch = { fields: {} }
     for (const f of enabledFields) patch.fields[f.key] = values[f.key].trim()
     if (tagsReady) patch.tags = { mode: tagMode, values: tagValues }
     setSaving(true)
@@ -84,7 +84,7 @@ export default function BulkEditModal({
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
-          <h2>명함 일괄 수정 ({count}개)</h2>
+          <h2>일괄 수정 ({count}명)</h2>
           <button
             type="button"
             className="btn ghost sm icon-only"
@@ -95,7 +95,7 @@ export default function BulkEditModal({
           </button>
         </div>
         <p className="muted bulk-hint">
-          변경할 항목만 체크하세요. 체크한 항목은 선택한 모든 명함에서 같은 값으로 바뀝니다.
+          변경할 항목만 체크하세요. 체크한 항목은 선택한 모든 사람에서 같은 값으로 바뀝니다.
         </p>
 
         <form onSubmit={submit}>
@@ -135,7 +135,7 @@ export default function BulkEditModal({
                   disabled={!tagsEnabled}
                   aria-label="태그 적용 방식"
                   onChange={(e) =>
-                    setTagMode(e.target.value as NonNullable<BulkContactPatch['tags']>['mode'])
+                    setTagMode(e.target.value as NonNullable<BulkPersonPatch['tags']>['mode'])
                   }
                 >
                   {TAG_MODES.map((m) => (
@@ -160,7 +160,7 @@ export default function BulkEditModal({
               </div>
               {tagsEnabled && tagMode === 'replace' && tagValues.length === 0 && (
                 <span className="field-error">
-                  비운 채 교체하면 선택한 명함의 태그가 모두 제거됩니다
+                  비운 채 교체하면 선택한 사람의 태그가 모두 제거됩니다
                 </span>
               )}
             </div>
@@ -172,7 +172,7 @@ export default function BulkEditModal({
             </button>
             <button type="submit" className="btn primary" disabled={saving || !canApply}>
               {saving && <Loader2 size={15} className="spin" />}
-              {count}개 명함에 적용
+              {count}명에 적용
             </button>
           </div>
         </form>

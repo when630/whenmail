@@ -18,7 +18,7 @@ describe('parseCardLines', () => {
       company: '(주)가온누리',
       department: '영업본부 솔루션영업팀',
       title: '차장',
-      email: 'sj.oh@gaon.example',
+      emails: ['sj.oh@gaon.example'],
       phone: '02-555-1234',
       mobile: '010-7777-8888',
       website: 'www.gaon.example',

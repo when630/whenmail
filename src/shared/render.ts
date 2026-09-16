@@ -1,7 +1,22 @@
-import type { Contact, RenderWarning } from './types'
+import type { Person, RenderWarning } from './types'
 
-/** 템플릿 변수명(한글) → Contact 필드 매핑 */
-export const TEMPLATE_VARIABLES: Record<string, keyof Contact | '__date__'> = {
+/** 템플릿 치환에 쓰이는 사람 필드 — email은 이번에 보낼 주소로 바꿔 넘길 수 있다 */
+export type TemplateData = Pick<
+  Person,
+  | 'name'
+  | 'company'
+  | 'department'
+  | 'title'
+  | 'email'
+  | 'phone'
+  | 'mobile'
+  | 'address'
+  | 'website'
+  | 'memo'
+>
+
+/** 템플릿 변수명(한글) → 사람 필드 매핑 */
+export const TEMPLATE_VARIABLES: Record<string, keyof TemplateData | '__date__'> = {
   이름: 'name',
   회사: 'company',
   부서: 'department',
@@ -32,7 +47,7 @@ export interface RenderResult {
  * - 값이 비면 기본값 사용(경고 수집), 기본값도 없으면 원문 유지 + 경고
  * - 알 수 없는 변수는 치환하지 않고 경고
  */
-export function renderTemplate(tpl: string, contact: Contact): RenderResult {
+export function renderTemplate(tpl: string, person: TemplateData): RenderResult {
   const warnings: RenderWarning[] = []
   const text = tpl.replace(VAR_PATTERN, (raw, name: string, fallback?: string) => {
     const field = TEMPLATE_VARIABLES[name]
@@ -40,7 +55,7 @@ export function renderTemplate(tpl: string, contact: Contact): RenderResult {
       warnings.push({ variable: name, usedDefault: null })
       return raw
     }
-    const value = field === '__date__' ? todayString() : String(contact[field] ?? '').trim()
+    const value = field === '__date__' ? todayString() : String(person[field] ?? '').trim()
     if (value) return value
     if (fallback !== undefined && fallback !== '') {
       warnings.push({ variable: name, usedDefault: fallback })

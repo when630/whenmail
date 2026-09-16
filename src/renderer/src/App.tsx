@@ -1,27 +1,30 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  Contact as ContactIcon,
-  History,
+  Activity as ActivityIcon,
+  Building2,
   Mail,
   PanelLeftClose,
   PanelLeftOpen,
   Search,
   Send,
-  Settings
+  Settings,
+  Users
 } from 'lucide-react'
-import type { Contact, OutlookAdapter } from '../../shared/types'
+import type { OutlookAdapter, Person } from '../../shared/types'
 import { useDialog } from './components/dialogs'
 import CommandPalette, { type ViewKey } from './components/CommandPalette'
 import ComposeModal from './views/ComposeModal'
-import ContactsView from './views/ContactsView'
+import PeopleView from './views/PeopleView'
+import CompaniesView from './views/CompaniesView'
 import TemplatesView from './views/TemplatesView'
-import HistoryView from './views/HistoryView'
+import ActivityView from './views/ActivityView'
 import SettingsView from './views/SettingsView'
 
-const NAV: { key: ViewKey; label: string; Icon: typeof ContactIcon }[] = [
-  { key: 'contacts', label: '명함', Icon: ContactIcon },
+const NAV: { key: ViewKey; label: string; Icon: typeof Users }[] = [
+  { key: 'people', label: '사람', Icon: Users },
+  { key: 'companies', label: '회사', Icon: Building2 },
   { key: 'templates', label: '템플릿', Icon: Mail },
-  { key: 'history', label: '이력', Icon: History },
+  { key: 'activity', label: '활동', Icon: ActivityIcon },
   { key: 'settings', label: '설정', Icon: Settings }
 ]
 
@@ -31,11 +34,14 @@ const MODE_LABEL: Record<OutlookAdapter, string> = {
   mailto: 'Outlook 연동 · mailto'
 }
 
-const VIEW_KEYS: ViewKey[] = ['contacts', 'templates', 'history', 'settings']
+const VIEW_KEYS: ViewKey[] = ['people', 'companies', 'templates', 'activity', 'settings']
 
 function initialView(): ViewKey {
   const v = new URLSearchParams(window.location.search).get('view')
-  return VIEW_KEYS.includes(v as ViewKey) ? (v as ViewKey) : 'contacts'
+  // 이전 버전의 주소(contacts/history)도 새 화면으로 연결
+  if (v === 'contacts') return 'people'
+  if (v === 'history') return 'activity'
+  return VIEW_KEYS.includes(v as ViewKey) ? (v as ViewKey) : 'people'
 }
 
 function initialExpanded(): boolean {
@@ -55,11 +61,13 @@ export default function App(): React.JSX.Element {
     () => typeof window !== 'undefined' && window.location.search.includes('palette=1')
   )
   const [paletteCompose, setPaletteCompose] = useState<{
-    contact: Contact
+    person: Person
     templateId: number
   } | null>(null)
-  const [newContactSignal, setNewContactSignal] = useState(0)
+  const [newPersonSignal, setNewPersonSignal] = useState(0)
   const [importSignal, setImportSignal] = useState(0)
+  /** 회사 화면에서 "사람 보기"로 넘어올 때의 회사 필터 */
+  const [peopleOrgFilter, setPeopleOrgFilter] = useState<{ id: number; name: string } | null>(null)
   const { toast } = useDialog()
   const updateNotifiedRef = useRef<string | null>(null)
 
@@ -99,15 +107,25 @@ export default function App(): React.JSX.Element {
     })
   }
 
-  const openNewContact = useCallback(() => {
-    setView('contacts')
-    setNewContactSignal((n) => n + 1)
+  const openNewPerson = useCallback(() => {
+    setView('people')
+    setNewPersonSignal((n) => n + 1)
   }, [])
 
   const openImport = useCallback(() => {
-    setView('contacts')
+    setView('people')
     setImportSignal((n) => n + 1)
   }, [])
+
+  const showCompanyPeople = useCallback((id: number, name: string) => {
+    setPeopleOrgFilter({ id, name })
+    setView('people')
+  }, [])
+
+  const navigate = (key: ViewKey): void => {
+    if (key === 'people') setPeopleOrgFilter(null)
+    setView(key)
+  }
 
   const tip = (label: string): { 'data-tip'?: string } => (expanded ? {} : { 'data-tip': label })
 
@@ -138,7 +156,7 @@ export default function App(): React.JSX.Element {
               className={`rail-item ${view === key ? 'active' : ''}`}
               {...tip(label)}
               aria-label={label}
-              onClick={() => setView(key)}
+              onClick={() => navigate(key)}
             >
               <Icon size={18} strokeWidth={1.9} />
               <span className="rail-label">{label}</span>
@@ -176,11 +194,17 @@ export default function App(): React.JSX.Element {
       </aside>
       <main className="content">
         <div className="view-enter" key={view}>
-          {view === 'contacts' && (
-            <ContactsView newContactSignal={newContactSignal} importSignal={importSignal} />
+          {view === 'people' && (
+            <PeopleView
+              newPersonSignal={newPersonSignal}
+              importSignal={importSignal}
+              organizationFilter={peopleOrgFilter}
+              onClearOrganizationFilter={() => setPeopleOrgFilter(null)}
+            />
           )}
+          {view === 'companies' && <CompaniesView onShowPeople={showCompanyPeople} />}
           {view === 'templates' && <TemplatesView />}
-          {view === 'history' && <HistoryView />}
+          {view === 'activity' && <ActivityView />}
           {view === 'settings' && (
             <SettingsView outlookMode={outlookMode} onOutlookModeChange={setOutlookMode} />
           )}
@@ -190,15 +214,15 @@ export default function App(): React.JSX.Element {
       {paletteOpen && (
         <CommandPalette
           onClose={() => setPaletteOpen(false)}
-          onNavigate={setView}
-          onCompose={(contact, templateId) => setPaletteCompose({ contact, templateId })}
-          onNewContact={openNewContact}
+          onNavigate={navigate}
+          onCompose={(person, templateId) => setPaletteCompose({ person, templateId })}
+          onNewPerson={openNewPerson}
           onImport={openImport}
         />
       )}
       {paletteCompose && (
         <ComposeModal
-          contacts={[paletteCompose.contact]}
+          people={[paletteCompose.person]}
           initialTemplateId={paletteCompose.templateId}
           onClose={() => setPaletteCompose(null)}
         />
