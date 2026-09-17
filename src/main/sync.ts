@@ -94,7 +94,9 @@ async function doSync(options: SyncOptions, ctx: ReadContext): Promise<SyncState
       repo.markAccountSynced(account.id)
 
       for (const item of result.inbound) {
-        if (!wasAwaiting.has(item.personId)) continue
+        // 회신이 오면 자동 종료 대상인 후속 리마인더를 닫는다
+        const closed = repo.autoCloseFollowUps(item.personId)
+        if (!wasAwaiting.has(item.personId) && closed === 0) continue
         // 기다리던 사람에게서 회신이 왔다 — 대기 알림을 닫고 도착을 알린다
         repo.closeAwaitingFor(item.personId)
         const person = repo.getPerson(item.personId)
@@ -126,7 +128,7 @@ async function doSync(options: SyncOptions, ctx: ReadContext): Promise<SyncState
   }
 
   repo.refreshContactTimes(options.personId)
-  createAwaitingNotifications()
+  createDueNotifications()
 
   broadcast({
     phase: failures.length > 0 ? 'error' : 'done',
@@ -138,10 +140,32 @@ async function doSync(options: SyncOptions, ctx: ReadContext): Promise<SyncState
   return state
 }
 
-/** 답장 대기 상태인 사람마다 알림을 하나씩 쌓는다 (같은 발신 건은 한 번만) */
-export function createAwaitingNotifications(): number {
+/**
+ * 알림함에 쌓을 것을 모두 만든다.
+ *  ① 기한이 된 후속 리마인더 ② 전역 규칙으로 잡힌 답장 대기
+ * 후속이 걸린 사람은 ②에서 빼서 같은 사람이 두 줄로 보이지 않게 한다.
+ */
+export function createDueNotifications(): number {
   let created = 0
+
+  for (const fu of repo.dueFollowUps()) {
+    const step = fu.step_no ? ` ${fu.step_no}단계` : ''
+    const ok = repo.pushNotification({
+      kind: 'follow_up',
+      personId: fu.person_id,
+      followUpId: fu.id,
+      title: fu.sequence_name
+        ? `${fu.person_name} — ${fu.sequence_name}${step}`
+        : `${fu.person_name}님 후속 챙기기`,
+      body: fu.note || `${fu.due_at.slice(0, 10)} 예정`,
+      dedupeKey: `followup:${fu.id}`
+    })
+    if (ok) created += 1
+  }
+
+  const covered = repo.openFollowUpPersonIds()
   for (const person of repo.awaitingReplyPeople()) {
+    if (covered.has(person.id)) continue
     const sentAt = person.last_outbound_at ?? ''
     const ok = repo.pushNotification({
       kind: 'awaiting_reply',
@@ -155,6 +179,9 @@ export function createAwaitingNotifications(): number {
   return created
 }
 
+/** 이전 이름 — 내부 호출 호환용 */
+export const createAwaitingNotifications = createDueNotifications
+
 export function registerSyncHandlers(): void {
   ipcMain.handle('sync:state', () => state)
   ipcMain.handle('sync:run', (_e, personId?: number) => runSync({ personId, notifyErrors: false }))
@@ -166,7 +193,7 @@ export function registerSyncHandlers(): void {
  */
 export function syncOnStartup(): void {
   try {
-    createAwaitingNotifications()
+    createDueNotifications()
   } catch (e) {
     console.error('[sync] 시작 시 알림 생성 실패:', e)
   }

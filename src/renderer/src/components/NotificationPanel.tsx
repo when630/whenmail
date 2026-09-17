@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useState } from 'react'
 import {
   Bell,
+  CalendarClock,
   CheckCheck,
   CircleAlert,
   Clock,
   Loader2,
   MailOpen,
   RefreshCw,
+  SendHorizontal,
   Trash2,
   X
 } from 'lucide-react'
@@ -15,6 +17,7 @@ import Avatar from './Avatar'
 
 const KIND_META: Record<NotificationKind, { label: string; Icon: typeof Bell }> = {
   awaiting_reply: { label: '회신 대기', Icon: Clock },
+  follow_up: { label: '후속', Icon: CalendarClock },
   reply_received: { label: '회신 도착', Icon: MailOpen },
   sync_error: { label: '동기화 오류', Icon: CircleAlert }
 }
@@ -24,6 +27,8 @@ interface Props {
   onChanged: (items: AppNotification[]) => void
   /** 알림에서 사람 열기 */
   onOpenPerson: (personId: number) => void
+  /** 알림에서 바로 초안 만들기 (후속이면 그 후속을 처리한다) */
+  onCompose: (personId: number, templateId?: number | null, followUpId?: number | null) => void
   onClose: () => void
 }
 
@@ -34,6 +39,7 @@ interface Props {
 export default function NotificationPanel({
   onChanged,
   onOpenPerson,
+  onCompose,
   onClose
 }: Props): React.JSX.Element {
   const [items, setItems] = useState<AppNotification[] | null>(null)
@@ -157,6 +163,18 @@ export default function NotificationPanel({
                     <div className="notify-title">{n.title}</div>
                     {n.body && <div className="muted notify-text">{n.body}</div>}
                     <div className="notify-actions">
+                      {n.person_id && (n.kind === 'follow_up' || n.kind === 'awaiting_reply') && (
+                        <button
+                          className="btn sm"
+                          onClick={() => {
+                            onCompose(n.person_id!, null, n.follow_up_id)
+                            onClose()
+                          }}
+                        >
+                          <SendHorizontal size={13} />
+                          초안 만들기
+                        </button>
+                      )}
                       {n.person_id && (
                         <button
                           className="btn ghost sm"

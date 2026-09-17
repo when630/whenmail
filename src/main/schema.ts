@@ -7,8 +7,9 @@ import type Database from 'better-sqlite3'
  *  v2: person / email_address(1:N) / organization / business_card(1:N) / person_tag / activity
  *  v3: account(발신 프로필) · activity.account_id
  *  v4: mail_index(헤더만) · notification(알림함) · person 연락 시각 캐시
+ *  v5: follow_up(후속 리마인더) · sequence/sequence_step/person_sequence(템플릿 시퀀스)
  */
-export const SCHEMA_VERSION = 4
+export const SCHEMA_VERSION = 5
 
 function tableExists(db: Database.Database, name: string): boolean {
   return Boolean(
@@ -72,6 +73,80 @@ export function migrateDatabase(db: Database.Database, file: string): void {
     })()
     version = 4
   }
+  if (version < 5) {
+    db.transaction(() => {
+      migrateV4toV5(db)
+      writeVersion(db, 5)
+    })()
+    version = 5
+  }
+}
+
+/**
+ * v5: 후속 리마인더와 템플릿 시퀀스.
+ * follow_up은 "이 사람에게 언제 다시 챙길지"를 건별로 담는다(전역 답장 대기 규칙과 별개).
+ * sequence는 템플릿을 순서로 묶기만 하고, 자동 전송은 하지 않는다 — 때가 되면 알림만 띄운다.
+ */
+const V5_TABLES = `
+  CREATE TABLE IF NOT EXISTS follow_up (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    person_id INTEGER NOT NULL REFERENCES person(id) ON DELETE CASCADE,
+    due_at TEXT NOT NULL,
+    reason TEXT NOT NULL DEFAULT 'manual',
+    note TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'open',
+    auto_close_on_reply INTEGER NOT NULL DEFAULT 1,
+    template_id INTEGER REFERENCES template(id) ON DELETE SET NULL,
+    sequence_id INTEGER REFERENCES sequence(id) ON DELETE CASCADE,
+    step_no INTEGER,
+    source_activity_id INTEGER REFERENCES activity(id) ON DELETE SET NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    resolved_at TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_followup_open ON follow_up(status, due_at);
+  CREATE INDEX IF NOT EXISTS idx_followup_person ON follow_up(person_id, status);
+
+  CREATE TABLE IF NOT EXISTS sequence (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    memo TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+  );
+
+  CREATE TABLE IF NOT EXISTS sequence_step (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sequence_id INTEGER NOT NULL REFERENCES sequence(id) ON DELETE CASCADE,
+    step_no INTEGER NOT NULL,
+    template_id INTEGER REFERENCES template(id) ON DELETE SET NULL,
+    delay_days INTEGER NOT NULL DEFAULT 7,
+    label TEXT NOT NULL DEFAULT '',
+    UNIQUE (sequence_id, step_no)
+  );
+
+  CREATE TABLE IF NOT EXISTS person_sequence (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    person_id INTEGER NOT NULL REFERENCES person(id) ON DELETE CASCADE,
+    sequence_id INTEGER NOT NULL REFERENCES sequence(id) ON DELETE CASCADE,
+    done_steps INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'running',
+    started_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    UNIQUE (person_id, sequence_id)
+  );
+`
+
+function addNotificationFollowUp(db: Database.Database): void {
+  if (!columnExists(db, 'notification', 'follow_up_id')) {
+    db.exec(
+      `ALTER TABLE notification ADD COLUMN follow_up_id INTEGER REFERENCES follow_up(id) ON DELETE CASCADE`
+    )
+  }
+}
+
+function migrateV4toV5(db: Database.Database): void {
+  db.exec(V5_TABLES)
+  addNotificationFollowUp(db)
 }
 
 /**
@@ -315,6 +390,8 @@ function createSchemaLatest(db: Database.Database): void {
   )
   db.exec(V4_TABLES)
   addPersonContactColumns(db)
+  db.exec(V5_TABLES)
+  addNotificationFollowUp(db)
 }
 
 /** 무료 메일 도메인 — 회사 도메인 자동 추출에서 제외 */

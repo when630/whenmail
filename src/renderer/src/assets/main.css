@@ -3217,3 +3217,263 @@ input[type='radio'] {
 .days-row input {
   width: 96px;
 }
+
+/* ---------- v5: 화면 탭 ---------- */
+.view-tabs {
+  margin-bottom: 16px;
+}
+
+.view-tabs button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tab-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--danger);
+  color: #fff;
+  font-size: 10.5px;
+  font-weight: 700;
+}
+
+.view-tabs + .view-split {
+  height: calc(100vh - 140px);
+}
+
+/* ---------- v5: 할 일 ---------- */
+.todo-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.todo-item {
+  display: flex;
+  gap: 12px;
+  padding: 13px 15px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+}
+
+.todo-item.overdue {
+  border-color: var(--warn);
+}
+
+.todo-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.todo-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 13px;
+}
+
+.todo-meta .badge {
+  gap: 3px;
+}
+
+.todo-due {
+  color: var(--warn);
+  font-weight: 600;
+}
+
+.todo-note {
+  margin-top: 4px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.todo-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 9px;
+  flex-wrap: wrap;
+}
+
+.todo-snooze {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 4px;
+}
+
+.badge.kind-follow_up {
+  background: var(--primary-soft);
+  color: var(--primary-soft-text);
+}
+
+/* ---------- v5: 사람 상세 후속 ---------- */
+.followup-add {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
+}
+
+.followup-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.followup-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+}
+
+.followup-list li.overdue {
+  border-color: var(--warn);
+}
+
+.followup-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.followup-due {
+  font-weight: 600;
+}
+
+.seq-start {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.seq-start select {
+  flex: 1;
+}
+
+/* ---------- v5: 시퀀스 ---------- */
+.seq-intro {
+  margin: -4px 0 14px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.seq-new {
+  margin-top: 10px;
+  justify-content: center;
+}
+
+.step-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.step-item {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-sunken);
+}
+
+.step-no {
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  margin-top: 16px;
+  border-radius: 50%;
+  background: var(--primary);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.step-fields {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  gap: 10px;
+}
+
+.step-immediate {
+  display: flex;
+  align-items: center;
+  height: 36px;
+  font-size: 12.5px;
+}
+
+.step-arrow {
+  position: absolute;
+  left: 22px;
+  bottom: -13px;
+  z-index: 1;
+}
+
+.step-add {
+  align-self: flex-start;
+  margin-top: 10px;
+}
+
+.seq-running {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12.5px;
+}
+
+/* ---------- v5: 초안 후속 옵션 ---------- */
+.compose-followup {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 9px 12px;
+  margin-bottom: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
+}
+
+.compose-followup .compose-toggle {
+  margin: 0;
+  gap: 7px;
+}
+
+.compose-followup .days-row input {
+  width: 80px;
+}

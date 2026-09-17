@@ -12,7 +12,10 @@ import type {
   DraftTarget,
   DuplicatePolicy,
   ExportFormat,
+  FollowUpInput,
+  FollowUpStatus,
   NotificationStatus,
+  SequenceInput,
   OrganizationInput,
   PersonFilter,
   PersonInput,
@@ -28,6 +31,7 @@ import { exportPeople } from './exporter'
 import { createDraftForAccount, testImapConnection, type DraftMessage } from './adapters'
 import { connectOAuth, pendingOAuthKey } from './oauth'
 import { secretKeys } from './credentials'
+import { createDueNotifications } from './sync'
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
@@ -179,6 +183,49 @@ export function registerIpcHandlers(): void {
     repo.clearNotifications(onlyDone !== false)
   )
 
+  // 후속 리마인더 · 할 일
+  ipcMain.handle('followups:list', (_e, personId?: number, includeClosed?: boolean) =>
+    repo.listFollowUps(personId, includeClosed)
+  )
+  ipcMain.handle('followups:create', (_e, input: FollowUpInput) => {
+    const fu = repo.createFollowUp(input)
+    // 기한이 이미 지났으면 바로 알림함에 올린다
+    createDueNotifications()
+    return fu
+  })
+  ipcMain.handle('followups:setStatus', (_e, id: number, status: FollowUpStatus) =>
+    repo.setFollowUpStatus(id, status)
+  )
+  ipcMain.handle('followups:snooze', (_e, id: number, days: number) =>
+    repo.snoozeFollowUp(id, days)
+  )
+  ipcMain.handle('followups:complete', (_e, id: number) => {
+    const fu = repo.completeFollowUp(id)
+    createDueNotifications()
+    return fu
+  })
+  ipcMain.handle('todos:list', () => {
+    createDueNotifications()
+    return repo.listTodos()
+  })
+
+  // 템플릿 시퀀스
+  ipcMain.handle('sequences:list', () => repo.listSequences())
+  ipcMain.handle('sequences:create', (_e, input: SequenceInput) => repo.createSequence(input))
+  ipcMain.handle('sequences:update', (_e, id: number, input: SequenceInput) =>
+    repo.updateSequence(id, input)
+  )
+  ipcMain.handle('sequences:delete', (_e, id: number) => repo.deleteSequence(id))
+  ipcMain.handle('sequences:start', (_e, personId: number, sequenceId: number) => {
+    const ps = repo.startSequence(personId, sequenceId)
+    createDueNotifications()
+    return ps
+  })
+  ipcMain.handle('sequences:stop', (_e, personSequenceId: number) =>
+    repo.stopSequence(personSequenceId)
+  )
+  ipcMain.handle('sequences:running', (_e, personId?: number) => repo.listPersonSequences(personId))
+
   ipcMain.handle('tags:list', () => repo.listTags())
 
   ipcMain.handle('ocr:scanCard', () => pickAndScanCard())
@@ -251,7 +298,7 @@ export function registerIpcHandlers(): void {
             ),
             adapterCtx
           )
-          repo.insertActivity({
+          const activity = repo.insertActivity({
             personId: person.id,
             kind: 'draft',
             templateId: template.id,
@@ -262,6 +309,19 @@ export function registerIpcHandlers(): void {
             summary: subject,
             adapter
           })
+          // 이 초안이 후속(또는 시퀀스 단계)을 처리한 것이면 완료하고 다음 단계를 예약한다
+          if (options.fulfillFollowUpId) {
+            repo.completeFollowUp(options.fulfillFollowUpId, activity.id)
+          }
+          // "N일 뒤 답 없으면 알림"을 함께 걸어 둔다
+          if (options.followUpDays && options.followUpDays > 0) {
+            repo.createFollowUp({
+              personId: person.id,
+              dueAt: repo.dueInDays(options.followUpDays),
+              note: `'${template.name}' 초안 뒤 회신 확인`,
+              templateId: template.id
+            })
+          }
           results.push({ personId: person.id, personName: person.name, ok: true, adapter })
         } catch (e) {
           results.push({
@@ -275,7 +335,10 @@ export function registerIpcHandlers(): void {
         if (i < people.length - 1 && account.kind === 'outlook_local') await sleep(800)
       }
 
-      if (results.some((r) => r.ok)) repo.touchTemplateUsed(template.id)
+      if (results.some((r) => r.ok)) {
+        repo.touchTemplateUsed(template.id)
+        createDueNotifications()
+      }
       return results
     }
   )

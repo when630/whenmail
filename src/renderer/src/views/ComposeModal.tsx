@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
+  CalendarClock,
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
@@ -30,8 +31,10 @@ import { useDialog } from '../components/dialogs'
 
 interface Props {
   people: Person[]
-  /** 팔레트에서 미리 고른 템플릿 — 목록에 있으면 기본 선택 */
+  /** 팔레트·할 일에서 미리 고른 템플릿 — 목록에 있으면 기본 선택 */
   initialTemplateId?: number
+  /** 이 초안이 처리하는 후속 리마인더 (완료하고 시퀀스를 다음 단계로 넘긴다) */
+  fulfillFollowUpId?: number | null
   onClose: () => void
 }
 
@@ -57,6 +60,7 @@ const RESULT_HINT: Record<Account['kind'], string> = {
 export default function ComposeModal({
   people,
   initialTemplateId,
+  fulfillFollowUpId,
   onClose
 }: Props): React.JSX.Element {
   const [templates, setTemplates] = useState<EmailTemplate[] | null>(null)
@@ -71,6 +75,9 @@ export default function ComposeModal({
   const [includeSignature, setIncludeSignature] = useState(true)
   const [sending, setSending] = useState(false)
   const [results, setResults] = useState<DraftResult[] | null>(null)
+  /** 이 초안 뒤에 회신 확인 리마인더를 걸지 */
+  const [followUpOn, setFollowUpOn] = useState(false)
+  const [followUpDays, setFollowUpDays] = useState(7)
   /** 사람별로 이번에 보낼 주소 (기본: 대표 주소) */
   const [chosen, setChosen] = useState<Record<number, string>>(() =>
     Object.fromEntries(people.map((p) => [p.id, p.email]))
@@ -101,6 +108,13 @@ export default function ComposeModal({
     window.api.system
       .outlookDetected()
       .then(setDetected)
+      .catch(() => undefined)
+    window.api.settings
+      .get()
+      .then((cfg) => {
+        setFollowUpDays(cfg.followUpDays)
+        setFollowUpOn(cfg.followUpDefaultOn)
+      })
       .catch(() => undefined)
     // 참조 입력 자동완성용 — 등록된 모든 주소
     window.api.people
@@ -166,7 +180,9 @@ export default function ComposeModal({
             accountId: account.id,
             cc,
             bcc,
-            includeSignature: hasSignature ? includeSignature : undefined
+            includeSignature: hasSignature ? includeSignature : undefined,
+            followUpDays: followUpOn ? followUpDays : undefined,
+            fulfillFollowUpId: fulfillFollowUpId ?? undefined
           }
         )
       )
@@ -321,6 +337,34 @@ export default function ComposeModal({
                 <span>본문 아래에 계정 서명 붙이기</span>
               </label>
             )}
+
+            <div className="compose-followup">
+              <label className="compose-toggle">
+                <input
+                  type="checkbox"
+                  checked={followUpOn}
+                  onChange={(e) => setFollowUpOn(e.target.checked)}
+                />
+                <CalendarClock size={14} />
+                <span>보낸 뒤 회신이 없으면 알리기</span>
+              </label>
+              {followUpOn && (
+                <span className="days-row">
+                  <input
+                    type="number"
+                    min={1}
+                    max={365}
+                    aria-label="후속 알림 일수"
+                    value={followUpDays}
+                    onChange={(e) => setFollowUpDays(Number(e.target.value))}
+                  />
+                  <span className="muted">일 뒤</span>
+                </span>
+              )}
+              {fulfillFollowUpId ? (
+                <span className="badge kind-follow_up">이 초안으로 후속 처리</span>
+              ) : null}
+            </div>
 
             {targets.length > 1 && (
               <div className="preview-nav">

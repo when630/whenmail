@@ -3,21 +3,35 @@ import {
   ArrowDownLeft,
   ArrowUpRight,
   Building2,
+  CalendarClock,
+  CalendarPlus,
+  CheckCheck,
   Clock,
   ExternalLink,
   Globe,
+  ListOrdered,
   Loader2,
   MapPin,
   Pencil,
   Phone,
+  Play,
   RefreshCw,
   SendHorizontal,
   Smartphone,
+  Square,
   StickyNote,
   Trash2,
   X
 } from 'lucide-react'
-import type { Activity, MailEntry, Person, SyncState } from '../../../shared/types'
+import type {
+  Activity,
+  FollowUp,
+  MailEntry,
+  Person,
+  PersonSequence,
+  Sequence,
+  SyncState
+} from '../../../shared/types'
 import Avatar from '../components/Avatar'
 import { useDialog } from '../components/dialogs'
 import { KIND_LABEL, activityText } from '../activityLabels'
@@ -26,6 +40,8 @@ interface Props {
   person: Person
   onEdit: () => void
   onCompose: () => void
+  /** 후속을 처리하는 초안 만들기 */
+  onComposeFollowUp?: (templateId: number | null, followUpId: number) => void
   /** 활동·메일이 바뀌어 목록의 마지막 연락일 등을 다시 읽어야 할 때 */
   onChanged?: () => void
   onClose: () => void
@@ -36,37 +52,63 @@ type TimelineItem =
   | { at: string; type: 'activity'; activity: Activity }
   | { at: string; type: 'mail'; mail: MailEntry }
 
+/** 오늘로부터 n일 뒤 'YYYY-MM-DD' */
+function inDays(n: number): string {
+  const d = new Date(Date.now() + n * 86400_000)
+  const pad = (x: number): string => String(x).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+}
+
 export default function PersonDetail({
   person,
   onEdit,
   onCompose,
+  onComposeFollowUp,
   onChanged,
   onClose
 }: Props): React.JSX.Element {
   const [activities, setActivities] = useState<Activity[] | null>(null)
   const [mails, setMails] = useState<MailEntry[] | null>(null)
   const [note, setNote] = useState('')
+  const [followUps, setFollowUps] = useState<FollowUp[] | null>(null)
+  const [running, setRunning] = useState<PersonSequence[]>([])
+  const [sequences, setSequences] = useState<Sequence[]>([])
+  const [dueDate, setDueDate] = useState(() => inDays(7))
+  const [dueNote, setDueNote] = useState('')
+  const [addingFollowUp, setAddingFollowUp] = useState(false)
+  const [busy, setBusy] = useState(false)
   const [saving, setSaving] = useState(false)
   const [syncing, setSyncing] = useState(false)
   const [thumbs, setThumbs] = useState<Record<number, string>>({})
   const { confirm, toast } = useDialog()
 
   const reload = useCallback(async () => {
-    const [acts, mail] = await Promise.all([
+    const [acts, mail, fus, seqs] = await Promise.all([
       window.api.activities.list(person.id),
-      window.api.mail.list(person.id)
+      window.api.mail.list(person.id),
+      window.api.followUps.list(person.id),
+      window.api.sequences.running(person.id)
     ])
     setActivities(acts)
     setMails(mail)
+    setFollowUps(fus)
+    setRunning(seqs)
   }, [person.id])
 
   useEffect(() => {
-    Promise.all([window.api.activities.list(person.id), window.api.mail.list(person.id)]).then(
-      ([acts, mail]) => {
-        setActivities(acts)
-        setMails(mail)
-      }
-    )
+    Promise.all([
+      window.api.activities.list(person.id),
+      window.api.mail.list(person.id),
+      window.api.followUps.list(person.id),
+      window.api.sequences.running(person.id),
+      window.api.sequences.list()
+    ]).then(([acts, mail, fus, seqs, allSeqs]) => {
+      setActivities(acts)
+      setMails(mail)
+      setFollowUps(fus)
+      setRunning(seqs)
+      setSequences(allSeqs)
+    })
   }, [person.id])
 
   useEffect(() => {
@@ -89,6 +131,20 @@ export default function PersonDetail({
     ]
     return items.sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0))
   }, [activities, mails])
+
+  /** 후속·시퀀스 조작 공통 — 끝나면 상세와 목록을 다시 읽는다 */
+  const act = async (fn: () => Promise<unknown>): Promise<void> => {
+    setBusy(true)
+    try {
+      await fn()
+      await reload()
+      onChanged?.()
+    } catch (e) {
+      toast(e instanceof Error ? e.message : String(e), 'error')
+    } finally {
+      setBusy(false)
+    }
+  }
 
   const addNote = async (): Promise<void> => {
     if (!note.trim()) return
@@ -235,6 +291,150 @@ export default function PersonDetail({
                 <Clock size={14} />
                 보낸 뒤 회신이 없습니다. 알림함에도 쌓입니다
               </p>
+            )}
+
+            <h3 className="detail-title">
+              후속
+              <span className="spacer" />
+              <button
+                className="btn ghost sm"
+                onClick={() => setAddingFollowUp((v) => !v)}
+                aria-expanded={addingFollowUp}
+              >
+                <CalendarPlus size={13} />
+                리마인더 추가
+              </button>
+            </h3>
+
+            {addingFollowUp && (
+              <div className="followup-add">
+                <div className="days-row">
+                  <input
+                    type="date"
+                    value={dueDate}
+                    aria-label="기한"
+                    onChange={(e) => setDueDate(e.target.value)}
+                  />
+                  {[3, 7, 14].map((d) => (
+                    <button key={d} className="btn ghost sm" onClick={() => setDueDate(inDays(d))}>
+                      +{d}일
+                    </button>
+                  ))}
+                </div>
+                <input
+                  value={dueNote}
+                  placeholder="무엇을 챙길지 — 예: 견적 회신 확인"
+                  onChange={(e) => setDueNote(e.target.value)}
+                />
+                <button
+                  className="btn primary sm"
+                  disabled={busy || !dueDate}
+                  onClick={() =>
+                    act(async () => {
+                      await window.api.followUps.create({
+                        personId: person.id,
+                        dueAt: dueDate,
+                        note: dueNote
+                      })
+                      setDueNote('')
+                      setAddingFollowUp(false)
+                    })
+                  }
+                >
+                  {busy ? <Loader2 size={14} className="spin" /> : <CalendarPlus size={14} />}
+                  추가
+                </button>
+              </div>
+            )}
+
+            {followUps === null ? null : followUps.length === 0 ? (
+              <p className="muted">걸어 둔 후속이 없습니다</p>
+            ) : (
+              <ul className="followup-list">
+                {followUps.map((f) => (
+                  <li key={f.id} className={f.overdue ? 'overdue' : ''}>
+                    <CalendarClock size={13} className="muted" />
+                    <span className="followup-main">
+                      <span className="followup-due">{f.due_at.slice(0, 16)}</span>
+                      {f.note && <span className="muted">{f.note}</span>}
+                      {f.sequence_name && (
+                        <span className="badge neutral">
+                          {f.sequence_name}
+                          {f.step_no ? ` ${f.step_no}단계` : ''}
+                        </span>
+                      )}
+                    </span>
+                    {onComposeFollowUp && (
+                      <button
+                        className="btn ghost sm icon-only"
+                        aria-label="이 후속으로 초안 만들기"
+                        title="초안 만들기"
+                        onClick={() => onComposeFollowUp(f.template_id, f.id)}
+                      >
+                        <SendHorizontal size={13} />
+                      </button>
+                    )}
+                    <button
+                      className="btn ghost sm icon-only"
+                      aria-label="후속 완료"
+                      title="완료"
+                      disabled={busy}
+                      onClick={() => act(() => window.api.followUps.complete(f.id))}
+                    >
+                      <CheckCheck size={13} />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+
+            {running.length > 0 && (
+              <ul className="followup-list">
+                {running
+                  .filter((ps) => ps.status === 'running')
+                  .map((ps) => (
+                    <li key={ps.id}>
+                      <ListOrdered size={13} className="muted" />
+                      <span className="followup-main">
+                        <span>{ps.sequence_name}</span>
+                        <span className="muted">
+                          {ps.done_steps}/{ps.total_steps}단계
+                        </span>
+                      </span>
+                      <button
+                        className="btn ghost sm icon-only danger"
+                        aria-label="시퀀스 중단"
+                        title="중단"
+                        disabled={busy}
+                        onClick={() => act(() => window.api.sequences.stop(ps.id))}
+                      >
+                        <Square size={13} />
+                      </button>
+                    </li>
+                  ))}
+              </ul>
+            )}
+
+            {sequences.length > 0 && (
+              <div className="seq-start">
+                <Play size={13} className="muted" />
+                <select
+                  aria-label="시퀀스 시작"
+                  value=""
+                  disabled={busy}
+                  onChange={(e) => {
+                    const id = Number(e.target.value)
+                    if (id) act(() => window.api.sequences.start(person.id, id))
+                  }}
+                >
+                  <option value="">시퀀스 시작…</option>
+                  {sequences.map((sq) => (
+                    <option key={sq.id} value={sq.id}>
+                      {sq.name} ({sq.steps.length}단계)
+                    </option>
+                  ))}
+                </select>
+              </div>
             )}
 
             {person.cards.length > 0 && (

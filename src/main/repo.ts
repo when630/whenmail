@@ -28,10 +28,18 @@ import type {
   DuplicatePolicy,
   EmailAddress,
   EmailTemplate,
+  FollowUp,
+  FollowUpInput,
+  FollowUpStatus,
   ImportSummary,
   Organization,
   OrganizationInput,
   Person,
+  PersonSequence,
+  Sequence,
+  SequenceInput,
+  SequenceStep,
+  TodoItem,
   PersonFilter,
   PersonInput,
   TemplateAttachment,
@@ -1159,7 +1167,7 @@ export function relinkMail(personId: number): void {
 
 const NOTIFICATION_SELECT = `
   SELECT n.id, n.kind, n.person_id, COALESCE(p.name, '') AS person_name, n.account_id,
-         n.title, n.body, n.status, n.created_at, n.resolved_at
+         n.follow_up_id, n.title, n.body, n.status, n.created_at, n.resolved_at
   FROM notification n LEFT JOIN person p ON p.id = n.person_id`
 
 export function listNotifications(includeDone = false, limit = 200): AppNotification[] {
@@ -1185,19 +1193,22 @@ export function pushNotification(entry: {
   kind: NotificationKind
   personId?: number | null
   accountId?: number | null
+  followUpId?: number | null
   title: string
   body?: string
   dedupeKey: string
 }): boolean {
   const info = getDb()
     .prepare(
-      `INSERT OR IGNORE INTO notification (kind, person_id, account_id, title, body, dedupe_key)
-       VALUES (?, ?, ?, ?, ?, ?)`
+      `INSERT OR IGNORE INTO notification
+         (kind, person_id, account_id, follow_up_id, title, body, dedupe_key)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       entry.kind,
       entry.personId ?? null,
       entry.accountId ?? null,
+      entry.followUpId ?? null,
       entry.title,
       entry.body ?? '',
       entry.dedupeKey
@@ -1260,6 +1271,435 @@ export function awaitingReplyPeople(): Person[] {
   return hydrate(rows)
 }
 
+/* ────────────────────────── 후속 리마인더 ────────────────────────── */
+
+const FOLLOW_UP_SELECT = `
+  SELECT f.id, f.person_id, COALESCE(p.name, '') AS person_name,
+         COALESCE(o.name, '') AS company,
+         f.due_at, f.reason, f.note, f.status, f.auto_close_on_reply,
+         f.template_id, COALESCE(t.name, '') AS template_name,
+         f.sequence_id, COALESCE(sq.name, '') AS sequence_name, f.step_no,
+         f.created_at, f.resolved_at,
+         CASE WHEN f.due_at <= datetime('now','localtime') THEN 1 ELSE 0 END AS overdue
+  FROM follow_up f
+  LEFT JOIN person p ON p.id = f.person_id
+  LEFT JOIN organization o ON o.id = p.organization_id
+  LEFT JOIN template t ON t.id = f.template_id
+  LEFT JOIN sequence sq ON sq.id = f.sequence_id`
+
+type FollowUpRow = Omit<FollowUp, 'auto_close_on_reply' | 'overdue'> & {
+  auto_close_on_reply: number
+  overdue: number
+}
+
+function rowToFollowUp(r: FollowUpRow): FollowUp {
+  return {
+    ...r,
+    auto_close_on_reply: Boolean(r.auto_close_on_reply),
+    overdue: Boolean(r.overdue)
+  }
+}
+
+export function listFollowUps(personId?: number, includeClosed = false): FollowUp[] {
+  const where: string[] = []
+  const params: (number | string)[] = []
+  if (personId) {
+    where.push('f.person_id = ?')
+    params.push(personId)
+  }
+  if (!includeClosed) where.push(`f.status = 'open'`)
+  const sql = `${FOLLOW_UP_SELECT} ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+    ORDER BY (f.status = 'open') DESC, f.due_at`
+  return (
+    getDb()
+      .prepare(sql)
+      .all(...params) as FollowUpRow[]
+  ).map(rowToFollowUp)
+}
+
+export function getFollowUp(id: number): FollowUp | null {
+  const row = getDb().prepare(`${FOLLOW_UP_SELECT} WHERE f.id = ?`).get(id) as
+    FollowUpRow | undefined
+  return row ? rowToFollowUp(row) : null
+}
+
+/** 'YYYY-MM-DD'만 오면 그날 오전 9시로 본다 */
+function normalizeDue(value: string): string {
+  const v = normalizeText(value)
+  if (!v) throw new Error('기한을 입력하세요')
+  if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return `${v} 09:00:00`
+  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(v)) return `${v}:00`
+  return v
+}
+
+/** 오늘로부터 n일 뒤 (로컬) */
+export function dueInDays(days: number): string {
+  const d = new Date(Date.now() + Math.max(days, 0) * 86400_000)
+  const pad = (n: number): string => String(n).padStart(2, '0')
+  return (
+    `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ` +
+    `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+  )
+}
+
+export function createFollowUp(input: FollowUpInput): FollowUp {
+  const db = getDb()
+  if (!getPerson(input.personId)) throw new Error('사람을 찾을 수 없습니다')
+  const info = db
+    .prepare(
+      `INSERT INTO follow_up (person_id, due_at, reason, note, template_id, auto_close_on_reply)
+       VALUES (?, ?, 'manual', ?, ?, ?)`
+    )
+    .run(
+      input.personId,
+      normalizeDue(input.dueAt),
+      normalizeText(input.note),
+      input.templateId ?? null,
+      input.autoCloseOnReply === false ? 0 : 1
+    )
+  return getFollowUp(Number(info.lastInsertRowid))!
+}
+
+export function setFollowUpStatus(id: number, status: FollowUpStatus): FollowUp | null {
+  getDb()
+    .prepare(
+      `UPDATE follow_up SET status = ?,
+         resolved_at = CASE WHEN ? = 'open' THEN NULL ELSE datetime('now','localtime') END
+       WHERE id = ?`
+    )
+    .run(status, status, id)
+  // 이 후속으로 만들어진 알림도 함께 정리한다
+  if (status !== 'open') {
+    getDb()
+      .prepare(
+        `UPDATE notification SET status = 'done', resolved_at = datetime('now','localtime')
+         WHERE follow_up_id = ? AND status <> 'done'`
+      )
+      .run(id)
+  }
+  return getFollowUp(id)
+}
+
+/** 기한을 미룬다. 이미 뜬 알림은 닫고 다음 기한에 다시 뜨게 한다 */
+export function snoozeFollowUp(id: number, days: number): FollowUp | null {
+  const db = getDb()
+  db.prepare(
+    `UPDATE follow_up SET due_at = ?, status = 'open', resolved_at = NULL WHERE id = ?`
+  ).run(dueInDays(days), id)
+  db.prepare(
+    `UPDATE notification SET status = 'done', resolved_at = datetime('now','localtime')
+     WHERE follow_up_id = ? AND status <> 'done'`
+  ).run(id)
+  return getFollowUp(id)
+}
+
+/** 기한이 된 열린 후속 */
+export function dueFollowUps(): FollowUp[] {
+  return (
+    getDb()
+      .prepare(
+        `${FOLLOW_UP_SELECT} WHERE f.status = 'open' AND f.due_at <= datetime('now','localtime')
+         ORDER BY f.due_at`
+      )
+      .all() as FollowUpRow[]
+  ).map(rowToFollowUp)
+}
+
+/** 열린 후속이 걸린 사람 (전역 답장 대기 알림과 겹치지 않게 쓴다) */
+export function openFollowUpPersonIds(): Set<number> {
+  const rows = getDb()
+    .prepare(`SELECT DISTINCT person_id FROM follow_up WHERE status = 'open'`)
+    .all() as { person_id: number }[]
+  return new Set(rows.map((r) => r.person_id))
+}
+
+/** 회신이 오면 자동 종료 대상인 후속을 닫는다. 닫힌 수를 반환 */
+export function autoCloseFollowUps(personId: number): number {
+  const db = getDb()
+  const ids = db
+    .prepare(
+      `SELECT id FROM follow_up
+       WHERE person_id = ? AND status = 'open' AND auto_close_on_reply = 1`
+    )
+    .all(personId) as { id: number }[]
+  for (const { id } of ids) setFollowUpStatus(id, 'auto_closed')
+  return ids.length
+}
+
+/* ────────────────────────── 할 일 ────────────────────────── */
+
+/**
+ * 할 일 목록 — 직접 건 후속(기한 순) + 규칙으로 잡힌 답장 대기.
+ * 후속이 걸린 사람은 답장 대기에서 빼서 같은 사람이 두 번 보이지 않게 한다.
+ */
+export function listTodos(): TodoItem[] {
+  const follows = listFollowUps()
+  const covered = new Set(follows.map((f) => f.person_id))
+  const items: TodoItem[] = follows.map((f) => ({
+    kind: 'follow_up',
+    key: `f-${f.id}`,
+    personId: f.person_id,
+    personName: f.person_name,
+    company: f.company,
+    at: f.due_at,
+    overdue: f.overdue,
+    note: f.note,
+    templateId: f.template_id,
+    templateName: f.template_name,
+    sequenceName: f.sequence_name,
+    stepNo: f.step_no,
+    followUpId: f.id
+  }))
+
+  for (const p of awaitingReplyPeople()) {
+    if (covered.has(p.id)) continue
+    items.push({
+      kind: 'awaiting',
+      key: `a-${p.id}`,
+      personId: p.id,
+      personName: p.name,
+      company: p.company,
+      at: p.last_outbound_at ?? '',
+      overdue: true,
+      note: '',
+      templateId: null,
+      templateName: '',
+      sequenceName: '',
+      stepNo: null,
+      followUpId: null
+    })
+  }
+  // 기한이 지난 것 먼저, 그다음 기한 순
+  return items.sort((a, b) => {
+    if (a.overdue !== b.overdue) return a.overdue ? -1 : 1
+    return a.at < b.at ? -1 : a.at > b.at ? 1 : 0
+  })
+}
+
+/* ────────────────────────── 템플릿 시퀀스 ────────────────────────── */
+
+export function listSequences(): Sequence[] {
+  const db = getDb()
+  const rows = db
+    .prepare(
+      `SELECT s.*, (SELECT COUNT(*) FROM person_sequence ps
+                    WHERE ps.sequence_id = s.id AND ps.status = 'running') AS running_count
+       FROM sequence s ORDER BY s.name`
+    )
+    .all() as (Omit<Sequence, 'steps'> & { running_count: number })[]
+  if (rows.length === 0) return []
+  const ph = placeholders(rows.length)
+  const steps = db
+    .prepare(
+      `SELECT st.id, st.sequence_id, st.step_no, st.template_id,
+              COALESCE(t.name, '') AS template_name, st.delay_days, st.label
+       FROM sequence_step st LEFT JOIN template t ON t.id = st.template_id
+       WHERE st.sequence_id IN (${ph}) ORDER BY st.step_no`
+    )
+    .all(...rows.map((r) => r.id)) as (SequenceStep & { sequence_id: number })[]
+  const byId = new Map<number, SequenceStep[]>()
+  for (const st of steps) {
+    const arr = byId.get(st.sequence_id) ?? []
+    arr.push({
+      id: st.id,
+      step_no: st.step_no,
+      template_id: st.template_id,
+      template_name: st.template_name,
+      delay_days: st.delay_days,
+      label: st.label
+    })
+    byId.set(st.sequence_id, arr)
+  }
+  return rows.map((r) => ({ ...r, steps: byId.get(r.id) ?? [] }))
+}
+
+export function getSequence(id: number): Sequence | null {
+  return listSequences().find((s) => s.id === id) ?? null
+}
+
+function saveSteps(sequenceId: number, input: SequenceInput): void {
+  const db = getDb()
+  db.prepare('DELETE FROM sequence_step WHERE sequence_id = ?').run(sequenceId)
+  const insert = db.prepare(
+    `INSERT INTO sequence_step (sequence_id, step_no, template_id, delay_days, label)
+     VALUES (?, ?, ?, ?, ?)`
+  )
+  input.steps.forEach((step, i) => {
+    insert.run(
+      sequenceId,
+      i + 1,
+      step.template_id ?? null,
+      // 1단계는 바로 시작하므로 지연이 없다
+      i === 0 ? 0 : Math.max(Number(step.delay_days) || 0, 0),
+      normalizeText(step.label)
+    )
+  })
+}
+
+export function createSequence(input: SequenceInput): Sequence {
+  const db = getDb()
+  const name = normalizeText(input.name)
+  if (!name) throw new Error('시퀀스 이름을 입력하세요')
+  if (!input.steps?.length) throw new Error('단계를 하나 이상 추가하세요')
+  const id = db.transaction(() => {
+    const info = db
+      .prepare('INSERT INTO sequence (name, memo) VALUES (?, ?)')
+      .run(name, normalizeText(input.memo))
+    const newId = Number(info.lastInsertRowid)
+    saveSteps(newId, input)
+    return newId
+  })()
+  return getSequence(id)!
+}
+
+export function updateSequence(id: number, input: SequenceInput): Sequence {
+  const db = getDb()
+  const name = normalizeText(input.name)
+  if (!name) throw new Error('시퀀스 이름을 입력하세요')
+  if (!input.steps?.length) throw new Error('단계를 하나 이상 추가하세요')
+  db.transaction(() => {
+    db.prepare(
+      `UPDATE sequence SET name = ?, memo = ?, updated_at = datetime('now','localtime') WHERE id = ?`
+    ).run(name, normalizeText(input.memo), id)
+    saveSteps(id, input)
+  })()
+  const seq = getSequence(id)
+  if (!seq) throw new Error('시퀀스를 찾을 수 없습니다')
+  return seq
+}
+
+export function deleteSequence(id: number): void {
+  getDb().prepare('DELETE FROM sequence WHERE id = ?').run(id)
+}
+
+export function listPersonSequences(personId?: number): PersonSequence[] {
+  const db = getDb()
+  const where = personId ? 'WHERE ps.person_id = ?' : ''
+  const params = personId ? [personId] : []
+  return db
+    .prepare(
+      `SELECT ps.id, ps.person_id, COALESCE(p.name, '') AS person_name, ps.sequence_id,
+              COALESCE(s.name, '') AS sequence_name, ps.done_steps,
+              (SELECT COUNT(*) FROM sequence_step st WHERE st.sequence_id = ps.sequence_id) AS total_steps,
+              ps.status, ps.started_at, ps.updated_at
+       FROM person_sequence ps
+       LEFT JOIN person p ON p.id = ps.person_id
+       LEFT JOIN sequence s ON s.id = ps.sequence_id
+       ${where}
+       ORDER BY ps.updated_at DESC`
+    )
+    .all(...params) as PersonSequence[]
+}
+
+/** 시퀀스 1단계를 바로 할 일로 띄운다. 자동 전송은 없고 초안 만들기만 안내한다 */
+export function startSequence(personId: number, sequenceId: number): PersonSequence {
+  const db = getDb()
+  const person = getPerson(personId)
+  if (!person) throw new Error('사람을 찾을 수 없습니다')
+  const seq = getSequence(sequenceId)
+  if (!seq) throw new Error('시퀀스를 찾을 수 없습니다')
+  if (seq.steps.length === 0) throw new Error('단계가 없는 시퀀스입니다')
+
+  db.transaction(() => {
+    const existing = db
+      .prepare('SELECT id FROM person_sequence WHERE person_id = ? AND sequence_id = ?')
+      .get(personId, sequenceId) as { id: number } | undefined
+    if (existing) {
+      db.prepare(
+        `UPDATE person_sequence SET status = 'running', done_steps = 0,
+           started_at = datetime('now','localtime'), updated_at = datetime('now','localtime')
+         WHERE id = ?`
+      ).run(existing.id)
+      // 진행 중이던 이 시퀀스의 후속은 정리하고 다시 시작한다
+      db.prepare(
+        `UPDATE follow_up SET status = 'canceled', resolved_at = datetime('now','localtime')
+         WHERE person_id = ? AND sequence_id = ? AND status = 'open'`
+      ).run(personId, sequenceId)
+    } else {
+      db.prepare('INSERT INTO person_sequence (person_id, sequence_id) VALUES (?, ?)').run(
+        personId,
+        sequenceId
+      )
+    }
+    const first = seq.steps[0]
+    db.prepare(
+      `INSERT INTO follow_up (person_id, due_at, reason, note, template_id, sequence_id, step_no)
+       VALUES (?, datetime('now','localtime'), 'sequence', ?, ?, ?, 1)`
+    ).run(personId, first.label || `${seq.name} 1단계`, first.template_id, sequenceId)
+  })()
+
+  return listPersonSequences(personId).find((ps) => ps.sequence_id === sequenceId)!
+}
+
+export function stopSequence(personSequenceId: number): void {
+  const db = getDb()
+  const row = db
+    .prepare('SELECT person_id, sequence_id FROM person_sequence WHERE id = ?')
+    .get(personSequenceId) as { person_id: number; sequence_id: number } | undefined
+  if (!row) return
+  db.transaction(() => {
+    db.prepare(
+      `UPDATE person_sequence SET status = 'stopped', updated_at = datetime('now','localtime')
+       WHERE id = ?`
+    ).run(personSequenceId)
+    const ids = db
+      .prepare(
+        `SELECT id FROM follow_up WHERE person_id = ? AND sequence_id = ? AND status = 'open'`
+      )
+      .all(row.person_id, row.sequence_id) as { id: number }[]
+    for (const { id } of ids) setFollowUpStatus(id, 'canceled')
+  })()
+}
+
+/**
+ * 후속을 처리했을 때 호출. 시퀀스 단계였으면 다음 단계를 예약한다.
+ * 마지막 단계였으면 시퀀스를 완료로 바꾼다.
+ */
+export function completeFollowUp(id: number, sourceActivityId?: number): FollowUp | null {
+  const db = getDb()
+  const fu = getFollowUp(id)
+  if (!fu) return null
+  db.transaction(() => {
+    db.prepare(
+      `UPDATE follow_up SET status = 'done', resolved_at = datetime('now','localtime'),
+         source_activity_id = COALESCE(?, source_activity_id) WHERE id = ?`
+    ).run(sourceActivityId ?? null, id)
+    db.prepare(
+      `UPDATE notification SET status = 'done', resolved_at = datetime('now','localtime')
+       WHERE follow_up_id = ? AND status <> 'done'`
+    ).run(id)
+
+    if (!fu.sequence_id || !fu.step_no) return
+    const seq = getSequence(fu.sequence_id)
+    const ps = db
+      .prepare('SELECT id FROM person_sequence WHERE person_id = ? AND sequence_id = ?')
+      .get(fu.person_id, fu.sequence_id) as { id: number } | undefined
+    if (!seq || !ps) return
+    db.prepare(
+      `UPDATE person_sequence SET done_steps = ?, updated_at = datetime('now','localtime')
+       WHERE id = ?`
+    ).run(fu.step_no, ps.id)
+
+    const next = seq.steps.find((st) => st.step_no === fu.step_no! + 1)
+    if (!next) {
+      db.prepare(`UPDATE person_sequence SET status = 'done' WHERE id = ?`).run(ps.id)
+      return
+    }
+    db.prepare(
+      `INSERT INTO follow_up (person_id, due_at, reason, note, template_id, sequence_id, step_no)
+       VALUES (?, ?, 'sequence', ?, ?, ?, ?)`
+    ).run(
+      fu.person_id,
+      dueInDays(next.delay_days),
+      next.label || `${seq.name} ${next.step_no}단계`,
+      next.template_id,
+      fu.sequence_id,
+      next.step_no
+    )
+  })()
+  return getFollowUp(id)
+}
+
 /* ────────────────────────── 설정 (연동 앱) ────────────────────────── */
 
 export function getSettings(): AppSettings {
@@ -1274,7 +1714,9 @@ export function getSettings(): AppSettings {
     googleClientId: map.get('oauth_google_client_id') ?? '',
     hasGoogleClientSecret: hasSecret(secretKeys.googleClientSecret),
     awaitingReplyDays: Number.isFinite(days) && days > 0 ? days : 7,
-    syncOnStartup: map.get('sync_on_startup') !== '0'
+    syncOnStartup: map.get('sync_on_startup') !== '0',
+    followUpDays: Number(map.get('follow_up_days')) > 0 ? Number(map.get('follow_up_days')) : 7,
+    followUpDefaultOn: map.get('follow_up_default_on') === '1'
   }
 }
 
@@ -1289,6 +1731,9 @@ export function saveSettings(input: AppSettings): AppSettings {
     const days = Math.min(Math.max(Math.round(Number(input.awaitingReplyDays) || 7), 1), 90)
     upsert.run('awaiting_reply_days', String(days))
     upsert.run('sync_on_startup', input.syncOnStartup === false ? '0' : '1')
+    const fu = Math.min(Math.max(Math.round(Number(input.followUpDays) || 7), 1), 365)
+    upsert.run('follow_up_days', String(fu))
+    upsert.run('follow_up_default_on', input.followUpDefaultOn ? '1' : '0')
   })()
   const secret = input.googleClientSecret
   if (secret === 'CLEAR') deleteSecret(secretKeys.googleClientSecret)

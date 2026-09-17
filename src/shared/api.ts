@@ -13,6 +13,9 @@ import type {
   DuplicatePolicy,
   EmailTemplate,
   ExportFormat,
+  FollowUp,
+  FollowUpInput,
+  FollowUpStatus,
   ImportParseResult,
   ImportSummary,
   MailEntry,
@@ -25,10 +28,14 @@ import type {
   Person,
   PersonFilter,
   PersonInput,
-  TagCount,
+  PersonSequence,
+  Sequence,
+  SequenceInput,
   SyncState,
+  TagCount,
   TemplateAttachment,
   TemplateInput,
+  TodoItem,
   UpdateState
 } from './types'
 
@@ -100,6 +107,31 @@ export interface WhenmailApi {
     markAllRead: () => Promise<AppNotification[]>
     /** 처리 완료 알림 비우기 (onlyDone=false면 전부) */
     clear: (onlyDone?: boolean) => Promise<AppNotification[]>
+  }
+  followUps: {
+    /** 열린 후속. personId를 주면 그 사람만, includeClosed면 처리한 것도 */
+    list: (personId?: number, includeClosed?: boolean) => Promise<FollowUp[]>
+    create: (input: FollowUpInput) => Promise<FollowUp>
+    setStatus: (id: number, status: FollowUpStatus) => Promise<FollowUp | null>
+    /** 기한을 n일 뒤로 미룬다 */
+    snooze: (id: number, days: number) => Promise<FollowUp | null>
+    /** 처리 완료. 시퀀스 단계였으면 다음 단계를 예약한다 */
+    complete: (id: number) => Promise<FollowUp | null>
+  }
+  todos: {
+    /** 후속 + 답장 대기를 합친 할 일 목록 (기한 지난 것 먼저) */
+    list: () => Promise<TodoItem[]>
+  }
+  sequences: {
+    list: () => Promise<Sequence[]>
+    create: (input: SequenceInput) => Promise<Sequence>
+    update: (id: number, input: SequenceInput) => Promise<Sequence>
+    remove: (id: number) => Promise<void>
+    /** 사람에게 시퀀스를 시작한다 (1단계가 바로 할 일로 뜬다) */
+    start: (personId: number, sequenceId: number) => Promise<PersonSequence>
+    stop: (personSequenceId: number) => Promise<void>
+    /** 진행 중인 시퀀스. personId를 주면 그 사람만 */
+    running: (personId?: number) => Promise<PersonSequence[]>
   }
   sync: {
     state: () => Promise<SyncState>

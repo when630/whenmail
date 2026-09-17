@@ -53,6 +53,11 @@ export default function PeopleView({
   const [editing, setEditing] = useState<Person | 'new' | null>(null)
   const [detail, setDetail] = useState<Person | null>(null)
   const [composeTargets, setComposeTargets] = useState<Person[] | null>(null)
+  /** 후속을 처리하는 초안 — 템플릿과 후속 id를 함께 넘긴다 */
+  const [composeFollowUp, setComposeFollowUp] = useState<{
+    templateId: number | null
+    followUpId: number
+  } | null>(null)
   const [importing, setImporting] = useState(false)
   const [bulkEditing, setBulkEditing] = useState(false)
   const [merging, setMerging] = useState(false)
@@ -470,6 +475,10 @@ export default function PeopleView({
           person={detail}
           onEdit={() => setEditing(detail)}
           onCompose={() => openCompose([detail])}
+          onComposeFollowUp={(templateId, followUpId) => {
+            setComposeFollowUp({ templateId, followUpId })
+            setComposeTargets([detail])
+          }}
           onChanged={() => reload(search, activeTag)}
           onClose={() => setDetail(null)}
         />
@@ -483,7 +492,16 @@ export default function PeopleView({
         />
       )}
       {composeTargets && (
-        <ComposeModal people={composeTargets} onClose={() => setComposeTargets(null)} />
+        <ComposeModal
+          people={composeTargets}
+          initialTemplateId={composeFollowUp?.templateId ?? undefined}
+          fulfillFollowUpId={composeFollowUp?.followUpId}
+          onClose={() => {
+            setComposeTargets(null)
+            setComposeFollowUp(null)
+            reload(search, activeTag, awaitingOnly)
+          }}
+        />
       )}
       {bulkEditing && selectedPeople.length > 0 && (
         <BulkEditModal

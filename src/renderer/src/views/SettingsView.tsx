@@ -53,7 +53,9 @@ const EMPTY_SETTINGS: AppSettings = {
   googleClientId: '',
   hasGoogleClientSecret: false,
   awaitingReplyDays: 7,
-  syncOnStartup: true
+  syncOnStartup: true,
+  followUpDays: 7,
+  followUpDefaultOn: true
 }
 
 const AZURE_URL =
@@ -82,6 +84,8 @@ export default function SettingsView({
   const [sync, setSync] = useState<SyncState | null>(null)
   const [days, setDays] = useState(7)
   const [onStartup, setOnStartup] = useState(true)
+  const [fuDays, setFuDays] = useState(7)
+  const [fuOn, setFuOn] = useState(true)
   const [savingSync, setSavingSync] = useState(false)
   const { confirm, toast } = useDialog()
 
@@ -105,6 +109,8 @@ export default function SettingsView({
       setGoogleId(s.googleClientId)
       setDays(s.awaitingReplyDays)
       setOnStartup(s.syncOnStartup)
+      setFuDays(s.followUpDays)
+      setFuOn(s.followUpDefaultOn)
     })
     window.api.sync.state().then(setSync)
     const offSync = window.api.sync.onState(setSync)
@@ -146,17 +152,27 @@ export default function SettingsView({
     toast('Google 클라이언트 시크릿을 삭제했습니다')
   }
 
+  const syncDirty =
+    days !== settings.awaitingReplyDays ||
+    onStartup !== settings.syncOnStartup ||
+    fuDays !== settings.followUpDays ||
+    fuOn !== settings.followUpDefaultOn
+
   const saveSync = async (): Promise<void> => {
     setSavingSync(true)
     try {
       const saved = await window.api.settings.save({
         ...settings,
         awaitingReplyDays: days,
-        syncOnStartup: onStartup
+        syncOnStartup: onStartup,
+        followUpDays: fuDays,
+        followUpDefaultOn: fuOn
       })
       setSettings(saved)
       setDays(saved.awaitingReplyDays)
       setOnStartup(saved.syncOnStartup)
+      setFuDays(saved.followUpDays)
+      setFuOn(saved.followUpDefaultOn)
       toast('알림 설정이 저장되었습니다')
     } catch (e) {
       toast(e instanceof Error ? e.message : String(e), 'error')
@@ -464,6 +480,26 @@ export default function SettingsView({
             />
             앱을 켤 때 메일을 한 번 확인
           </label>
+          <label className="form-field">
+            <span>
+              후속 리마인더 기본 기간{' '}
+              <em className="muted hint-inline">— 초안 만들기에서 미리 채워지는 값</em>
+            </span>
+            <div className="days-row">
+              <input
+                type="number"
+                min={1}
+                max={365}
+                value={fuDays}
+                onChange={(e) => setFuDays(Number(e.target.value))}
+              />
+              <span className="muted">일</span>
+            </div>
+          </label>
+          <label className="option-row">
+            <input type="checkbox" checked={fuOn} onChange={(e) => setFuOn(e.target.checked)} />
+            초안을 만들 때 후속 리마인더를 기본으로 켜 두기
+          </label>
         </div>
         <div className="settings-actions">
           <button
@@ -479,20 +515,13 @@ export default function SettingsView({
             지금 메일 확인
           </button>
           <span className="spacer" />
-          {(days !== settings.awaitingReplyDays || onStartup !== settings.syncOnStartup) && (
+          {syncDirty && (
             <span className="dirty-hint">
               <CircleAlert size={14} />
               저장되지 않음
             </span>
           )}
-          <button
-            className="btn primary"
-            onClick={saveSync}
-            disabled={
-              savingSync ||
-              (days === settings.awaitingReplyDays && onStartup === settings.syncOnStartup)
-            }
-          >
+          <button className="btn primary" onClick={saveSync} disabled={savingSync || !syncDirty}>
             {savingSync ? <Loader2 size={15} className="spin" /> : <Save size={15} />}
             저장
           </button>

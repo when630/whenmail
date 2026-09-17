@@ -342,11 +342,12 @@ export interface SyncState {
 /* ────────────────────────── 알림함 ────────────────────────── */
 
 /**
- * awaiting_reply: 보낸 뒤 기간이 지나도 회신 없음
+ * awaiting_reply: 보낸 뒤 기간이 지나도 회신 없음 (전역 규칙)
+ * follow_up: 직접 걸어 둔 후속 리마인더의 기한이 됨
  * reply_received: 기다리던 사람에게서 회신 도착
  * sync_error: 계정 동기화 실패
  */
-export type NotificationKind = 'awaiting_reply' | 'reply_received' | 'sync_error'
+export type NotificationKind = 'awaiting_reply' | 'follow_up' | 'reply_received' | 'sync_error'
 
 export type NotificationStatus = 'unread' | 'read' | 'done'
 
@@ -356,11 +357,120 @@ export interface AppNotification {
   person_id: number | null
   person_name: string
   account_id: number | null
+  /** 후속 알림이면 그 리마인더 (완료 처리·다음 초안에 쓴다) */
+  follow_up_id: number | null
   title: string
   body: string
   status: NotificationStatus
   created_at: string
   resolved_at: string | null
+}
+
+/* ────────────────────────── 후속 리마인더 ────────────────────────── */
+
+/** manual = 직접 걸어 둔 것, sequence = 시퀀스의 다음 단계 */
+export type FollowUpReason = 'manual' | 'sequence'
+
+/** open = 대기 중, done = 처리함, auto_closed = 회신이 와서 자동 종료, canceled = 취소 */
+export type FollowUpStatus = 'open' | 'done' | 'auto_closed' | 'canceled'
+
+export interface FollowUp {
+  id: number
+  person_id: number
+  person_name: string
+  /** 회사 — 목록 표시용 */
+  company: string
+  due_at: string
+  reason: FollowUpReason
+  note: string
+  status: FollowUpStatus
+  /** 회신이 오면 자동으로 닫을지 */
+  auto_close_on_reply: boolean
+  /** 이 후속에서 쓸 템플릿 (시퀀스 단계나 직접 지정) */
+  template_id: number | null
+  template_name: string
+  sequence_id: number | null
+  sequence_name: string
+  /** 시퀀스에서 몇 번째 단계인지 (1부터) */
+  step_no: number | null
+  created_at: string
+  resolved_at: string | null
+  /** 기한이 지났는지 (조회 시 계산) */
+  overdue: boolean
+}
+
+export interface FollowUpInput {
+  personId: number
+  /** 'YYYY-MM-DD' 또는 'YYYY-MM-DD HH:mm:ss' */
+  dueAt: string
+  note?: string
+  templateId?: number | null
+  autoCloseOnReply?: boolean
+}
+
+/** 할 일 화면에 함께 보여줄 항목 — 직접 건 후속 + 규칙으로 잡힌 답장 대기 */
+export interface TodoItem {
+  kind: 'follow_up' | 'awaiting'
+  /** follow_up이면 그 id, awaiting이면 사람 id */
+  key: string
+  personId: number
+  personName: string
+  company: string
+  /** 후속은 기한, 답장 대기는 마지막 발신 시각 */
+  at: string
+  overdue: boolean
+  note: string
+  templateId: number | null
+  templateName: string
+  sequenceName: string
+  stepNo: number | null
+  followUpId: number | null
+}
+
+/* ────────────────────────── 템플릿 시퀀스 ────────────────────────── */
+
+export interface SequenceStep {
+  id: number
+  step_no: number
+  template_id: number | null
+  template_name: string
+  /** 앞 단계 초안을 만든 뒤 며칠 있다가 이 단계를 띄울지 (1단계는 0) */
+  delay_days: number
+  label: string
+}
+
+export interface Sequence {
+  id: number
+  name: string
+  memo: string
+  steps: SequenceStep[]
+  /** 진행 중인 사람 수 (조회 시 계산) */
+  running_count: number
+  created_at: string
+  updated_at: string
+}
+
+export interface SequenceInput {
+  name: string
+  memo: string
+  steps: { template_id: number | null; delay_days: number; label: string }[]
+}
+
+export type PersonSequenceStatus = 'running' | 'done' | 'stopped'
+
+/** 사람에게 진행 중인 시퀀스 */
+export interface PersonSequence {
+  id: number
+  person_id: number
+  person_name: string
+  sequence_id: number
+  sequence_name: string
+  /** 완료한 단계 수 */
+  done_steps: number
+  total_steps: number
+  status: PersonSequenceStatus
+  started_at: string
+  updated_at: string
 }
 
 export interface RenderWarning {
@@ -383,6 +493,10 @@ export interface AppSettings {
   awaitingReplyDays: number
   /** 앱을 켤 때 읽기 동기화를 자동으로 한 번 돌릴지 */
   syncOnStartup: boolean
+  /** 초안 만들기에서 후속 리마인더 기본 일수 */
+  followUpDays: number
+  /** 초안을 만들 때 후속 리마인더를 기본으로 켜 둘지 */
+  followUpDefaultOn: boolean
 }
 
 /** 초안 생성 시 모든 수신자에게 공통 적용되는 옵션 */
@@ -395,6 +509,10 @@ export interface DraftOptions {
   bcc?: string
   /** 이번 초안에 계정 서명을 붙일지 (기본: 계정의 서명 사용 여부) */
   includeSignature?: boolean
+  /** 이 일수 뒤에 회신이 없으면 알리도록 후속 리마인더를 함께 건다 */
+  followUpDays?: number
+  /** 이 초안이 처리하는 후속 리마인더 (완료 처리하고 시퀀스를 다음 단계로 넘긴다) */
+  fulfillFollowUpId?: number
 }
 
 /** 여러 사람에 공통 적용하는 일괄 수정 내용 */

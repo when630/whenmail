@@ -72,9 +72,11 @@ export default function App(): React.JSX.Element {
   const [paletteOpen, setPaletteOpen] = useState(
     () => typeof window !== 'undefined' && window.location.search.includes('palette=1')
   )
-  const [paletteCompose, setPaletteCompose] = useState<{
-    person: Person
-    templateId: number
+  /** 초안 만들기 — 팔레트·알림함·할 일에서 모두 이 상태로 연다 */
+  const [compose, setCompose] = useState<{
+    people: Person[]
+    templateId?: number | null
+    followUpId?: number | null
   } | null>(null)
   const [newPersonSignal, setNewPersonSignal] = useState(0)
   const [importSignal, setImportSignal] = useState(0)
@@ -151,6 +153,15 @@ export default function App(): React.JSX.Element {
     setOpenPerson((prev) => ({ id, n: (prev?.n ?? 0) + 1 }))
     setView('people')
   }, [])
+
+  /** 알림함·할 일에서 특정 사람에게 초안 만들기 (후속을 처리하는 경우 포함) */
+  const composeFor = useCallback(
+    async (personId: number, templateId?: number | null, followUpId?: number | null) => {
+      const person = await window.api.people.get(personId)
+      if (person) setCompose({ people: [person], templateId, followUpId })
+    },
+    []
+  )
 
   const navigate = (key: ViewKey): void => {
     if (key === 'people') setPeopleOrgFilter(null)
@@ -247,7 +258,7 @@ export default function App(): React.JSX.Element {
           )}
           {view === 'companies' && <CompaniesView onShowPeople={showCompanyPeople} />}
           {view === 'templates' && <TemplatesView />}
-          {view === 'activity' && <ActivityView />}
+          {view === 'activity' && <ActivityView onCompose={composeFor} />}
           {view === 'settings' && <SettingsView onAccountsChange={setAccounts} />}
         </div>
       </main>
@@ -258,6 +269,7 @@ export default function App(): React.JSX.Element {
             setUnread(list.filter((n) => n.status === 'unread').length)
           }
           onOpenPerson={showPerson}
+          onCompose={composeFor}
           onClose={() => {
             setNotifyOpen(false)
             window.api.notifications.unreadCount().then(setUnread)
@@ -268,16 +280,20 @@ export default function App(): React.JSX.Element {
         <CommandPalette
           onClose={() => setPaletteOpen(false)}
           onNavigate={navigate}
-          onCompose={(person, templateId) => setPaletteCompose({ person, templateId })}
+          onCompose={(person, templateId) => setCompose({ people: [person], templateId })}
           onNewPerson={openNewPerson}
           onImport={openImport}
         />
       )}
-      {paletteCompose && (
+      {compose && (
         <ComposeModal
-          people={[paletteCompose.person]}
-          initialTemplateId={paletteCompose.templateId}
-          onClose={() => setPaletteCompose(null)}
+          people={compose.people}
+          initialTemplateId={compose.templateId ?? undefined}
+          fulfillFollowUpId={compose.followUpId}
+          onClose={() => {
+            setCompose(null)
+            window.api.notifications.unreadCount().then(setUnread)
+          }}
         />
       )}
     </div>

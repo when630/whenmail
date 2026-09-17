@@ -14,6 +14,9 @@ import type {
   DuplicatePolicy,
   EmailTemplate,
   ExportFormat,
+  FollowUp,
+  FollowUpInput,
+  FollowUpStatus,
   ImportParseResult,
   ImportSummary,
   MailEntry,
@@ -26,10 +29,14 @@ import type {
   Person,
   PersonFilter,
   PersonInput,
+  PersonSequence,
+  Sequence,
+  SequenceInput,
   SyncState,
   TagCount,
   TemplateAttachment,
   TemplateInput,
+  TodoItem,
   UpdateState
 } from '../shared/types'
 import type { WhenmailApi } from '../shared/api'
@@ -98,6 +105,34 @@ const api: WhenmailApi = {
     markAllRead: (): Promise<AppNotification[]> => ipcRenderer.invoke('notifications:markAllRead'),
     clear: (onlyDone?: boolean): Promise<AppNotification[]> =>
       ipcRenderer.invoke('notifications:clear', onlyDone)
+  },
+  followUps: {
+    list: (personId?: number, includeClosed?: boolean): Promise<FollowUp[]> =>
+      ipcRenderer.invoke('followups:list', personId, includeClosed),
+    create: (input: FollowUpInput): Promise<FollowUp> =>
+      ipcRenderer.invoke('followups:create', input),
+    setStatus: (id: number, status: FollowUpStatus): Promise<FollowUp | null> =>
+      ipcRenderer.invoke('followups:setStatus', id, status),
+    snooze: (id: number, days: number): Promise<FollowUp | null> =>
+      ipcRenderer.invoke('followups:snooze', id, days),
+    complete: (id: number): Promise<FollowUp | null> => ipcRenderer.invoke('followups:complete', id)
+  },
+  todos: {
+    list: (): Promise<TodoItem[]> => ipcRenderer.invoke('todos:list')
+  },
+  sequences: {
+    list: (): Promise<Sequence[]> => ipcRenderer.invoke('sequences:list'),
+    create: (input: SequenceInput): Promise<Sequence> =>
+      ipcRenderer.invoke('sequences:create', input),
+    update: (id: number, input: SequenceInput): Promise<Sequence> =>
+      ipcRenderer.invoke('sequences:update', id, input),
+    remove: (id: number): Promise<void> => ipcRenderer.invoke('sequences:delete', id),
+    start: (personId: number, sequenceId: number): Promise<PersonSequence> =>
+      ipcRenderer.invoke('sequences:start', personId, sequenceId),
+    stop: (personSequenceId: number): Promise<void> =>
+      ipcRenderer.invoke('sequences:stop', personSequenceId),
+    running: (personId?: number): Promise<PersonSequence[]> =>
+      ipcRenderer.invoke('sequences:running', personId)
   },
   sync: {
     state: (): Promise<SyncState> => ipcRenderer.invoke('sync:state'),

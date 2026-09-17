@@ -7,11 +7,15 @@ import type {
   AppSettings,
   DuplicateGroup,
   EmailTemplate,
+  FollowUp,
   MailEntry,
   Organization,
   Person,
   PersonInput,
-  SyncState
+  PersonSequence,
+  Sequence,
+  SyncState,
+  TodoItem
 } from '../../shared/types'
 
 /**
@@ -213,7 +217,9 @@ export function installMockApiIfNeeded(): void {
     googleClientId: '',
     hasGoogleClientSecret: false,
     awaitingReplyDays: 7,
-    syncOnStartup: true
+    syncOnStartup: true,
+    followUpDays: 7,
+    followUpDefaultOn: true
   }
   const accountBase = {
     signature_enabled: true,
@@ -328,6 +334,7 @@ export function installMockApiIfNeeded(): void {
       person_id: 1,
       person_name: '김서연',
       account_id: null,
+      follow_up_id: null,
       title: '김서연님 회신 대기',
       body: '2026-09-10에 보낸 뒤 회신이 없습니다',
       status: 'unread',
@@ -340,6 +347,7 @@ export function installMockApiIfNeeded(): void {
       person_id: 2,
       person_name: '박준호',
       account_id: 2,
+      follow_up_id: null,
       title: '박준호님에게서 회신이 왔습니다',
       body: 'Re: 박준호님, 요청하신 자료 보내드립니다',
       status: 'unread',
@@ -352,6 +360,7 @@ export function installMockApiIfNeeded(): void {
       person_id: null,
       person_name: '',
       account_id: 4,
+      follow_up_id: null,
       title: '네이버 메일 동기화 실패',
       body: 'IMAP 비밀번호가 저장되어 있지 않습니다',
       status: 'read',
@@ -359,6 +368,119 @@ export function installMockApiIfNeeded(): void {
       resolved_at: null
     }
   ]
+
+  let followUps: FollowUp[] = [
+    {
+      id: 1,
+      person_id: 2,
+      person_name: '박준호',
+      company: '대성테크',
+      due_at: '2026-09-16 09:00:00',
+      reason: 'sequence',
+      note: '자료 보내기',
+      status: 'open',
+      auto_close_on_reply: true,
+      template_id: 2,
+      template_name: '자료 송부',
+      sequence_id: 1,
+      sequence_name: '신규 고객 3단계',
+      step_no: 2,
+      created_at: '2026-09-09 10:00:00',
+      resolved_at: null,
+      overdue: true
+    },
+    {
+      id: 2,
+      person_id: 1,
+      person_name: '김서연',
+      company: '한빛물산',
+      due_at: '2026-09-20 09:00:00',
+      reason: 'manual',
+      note: '견적서 회신 확인',
+      status: 'open',
+      auto_close_on_reply: true,
+      template_id: null,
+      template_name: '',
+      sequence_id: null,
+      sequence_name: '',
+      step_no: null,
+      created_at: '2026-09-13 10:00:00',
+      resolved_at: null,
+      overdue: false
+    }
+  ]
+
+  let sequences: Sequence[] = [
+    {
+      id: 1,
+      name: '신규 고객 3단계',
+      memo: '전시회에서 받은 명함용',
+      steps: [
+        {
+          id: 1,
+          step_no: 1,
+          template_id: 1,
+          template_name: '첫 인사 메일',
+          delay_days: 0,
+          label: '첫 인사'
+        },
+        {
+          id: 2,
+          step_no: 2,
+          template_id: 2,
+          template_name: '자료 송부',
+          delay_days: 7,
+          label: '자료 보내기'
+        },
+        {
+          id: 3,
+          step_no: 3,
+          template_id: null,
+          template_name: '',
+          delay_days: 14,
+          label: '미팅 제안'
+        }
+      ],
+      running_count: 1,
+      created_at: now,
+      updated_at: now
+    }
+  ]
+
+  let personSequences: PersonSequence[] = [
+    {
+      id: 1,
+      person_id: 2,
+      person_name: '박준호',
+      sequence_id: 1,
+      sequence_name: '신규 고객 3단계',
+      done_steps: 1,
+      total_steps: 3,
+      status: 'running',
+      started_at: '2026-09-09 10:00:00',
+      updated_at: '2026-09-09 10:00:00'
+    }
+  ]
+
+  const todosOf = (): TodoItem[] =>
+    followUps
+      .filter((f) => f.status === 'open')
+      .map((f) => ({
+        kind: 'follow_up' as const,
+        key: `f-${f.id}`,
+        personId: f.person_id,
+        personName: f.person_name,
+        company: f.company,
+        at: f.due_at,
+        overdue: f.overdue,
+        note: f.note,
+        templateId: f.template_id,
+        templateName: f.template_name,
+        sequenceName: f.sequence_name,
+        stepNo: f.step_no,
+        followUpId: f.id
+      }))
+      .sort((a, b) => (a.overdue === b.overdue ? (a.at < b.at ? -1 : 1) : a.overdue ? -1 : 1))
 
   let syncState: SyncState = {
     phase: 'done',
@@ -540,6 +662,115 @@ export function installMockApiIfNeeded(): void {
         return notifications.filter((n) => n.status !== 'done')
       }
     },
+    followUps: {
+      list: async (personId, includeClosed) =>
+        followUps.filter(
+          (f) => (!personId || f.person_id === personId) && (includeClosed || f.status === 'open')
+        ),
+      create: async (input) => {
+        const f: FollowUp = {
+          id: Date.now(),
+          person_id: input.personId,
+          person_name: people.find((p) => p.id === input.personId)?.name ?? '',
+          company: people.find((p) => p.id === input.personId)?.company ?? '',
+          due_at: input.dueAt,
+          reason: 'manual',
+          note: input.note ?? '',
+          status: 'open',
+          auto_close_on_reply: input.autoCloseOnReply !== false,
+          template_id: input.templateId ?? null,
+          template_name: '',
+          sequence_id: null,
+          sequence_name: '',
+          step_no: null,
+          created_at: '2026-09-17 10:00:00',
+          resolved_at: null,
+          overdue: false
+        }
+        followUps = [...followUps, f]
+        return f
+      },
+      setStatus: async (id, status) => {
+        followUps = followUps.map((f) => (f.id === id ? { ...f, status } : f))
+        return followUps.find((f) => f.id === id) ?? null
+      },
+      snooze: async (id, days) => {
+        followUps = followUps.map((f) =>
+          f.id === id ? { ...f, overdue: false, note: `${f.note} (+${days}일 미룸)` } : f
+        )
+        return followUps.find((f) => f.id === id) ?? null
+      },
+      complete: async (id) => {
+        followUps = followUps.map((f) => (f.id === id ? { ...f, status: 'done' as const } : f))
+        return followUps.find((f) => f.id === id) ?? null
+      }
+    },
+    todos: {
+      list: async () => todosOf()
+    },
+    sequences: {
+      list: async () => sequences,
+      create: async (input) => {
+        const s: Sequence = {
+          id: Date.now(),
+          name: input.name,
+          memo: input.memo,
+          steps: input.steps.map((st, i) => ({
+            id: i + 1,
+            step_no: i + 1,
+            template_id: st.template_id,
+            template_name: templates.find((t) => t.id === st.template_id)?.name ?? '',
+            delay_days: i === 0 ? 0 : st.delay_days,
+            label: st.label
+          })),
+          running_count: 0,
+          created_at: now,
+          updated_at: now
+        }
+        sequences = [...sequences, s]
+        return s
+      },
+      update: async (id, input) => {
+        const s: Sequence = {
+          ...sequences.find((x) => x.id === id)!,
+          name: input.name,
+          memo: input.memo,
+          steps: input.steps.map((st, i) => ({
+            id: i + 1,
+            step_no: i + 1,
+            template_id: st.template_id,
+            template_name: templates.find((t) => t.id === st.template_id)?.name ?? '',
+            delay_days: i === 0 ? 0 : st.delay_days,
+            label: st.label
+          }))
+        }
+        sequences = sequences.map((x) => (x.id === id ? s : x))
+        return s
+      },
+      remove: async (id) => {
+        sequences = sequences.filter((s) => s.id !== id)
+      },
+      start: async (personId, sequenceId) =>
+        personSequences[0] ?? {
+          id: 1,
+          person_id: personId,
+          person_name: '',
+          sequence_id: sequenceId,
+          sequence_name: '',
+          done_steps: 0,
+          total_steps: 0,
+          status: 'running',
+          started_at: now,
+          updated_at: now
+        },
+      stop: async (id) => {
+        personSequences = personSequences.map((ps) =>
+          ps.id === id ? { ...ps, status: 'stopped' as const } : ps
+        )
+      },
+      running: async (personId) =>
+        personId ? personSequences.filter((ps) => ps.person_id === personId) : personSequences
+    },
     sync: {
       state: async () => syncState,
       run: async () => {
@@ -648,6 +879,8 @@ export function installMockApiIfNeeded(): void {
           googleClientId: input.googleClientId,
           awaitingReplyDays: input.awaitingReplyDays,
           syncOnStartup: input.syncOnStartup,
+          followUpDays: input.followUpDays,
+          followUpDefaultOn: input.followUpDefaultOn,
           hasGoogleClientSecret:
             input.googleClientSecret === 'CLEAR'
               ? false
