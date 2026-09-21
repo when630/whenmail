@@ -1,5 +1,9 @@
 appId: com.when630.whenimail
 productName: whenmail
+# 형제 앱 연동(D-14, when-protocol) — WHENCOMMAND가 whenmail://<명령>으로 부른다
+protocols:
+  - name: whenmail
+    schemes: [whenmail]
 directories:
   buildResources: build
 files:

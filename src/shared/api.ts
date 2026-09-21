@@ -1,3 +1,4 @@
+import type { DeepLink } from './deeplink'
 import type {
   Account,
   AccountInput,
@@ -198,5 +199,9 @@ export interface WhenmailApi {
     export: () => Promise<string | null>
     /** zip에서 복원. 성공하면 앱이 재시작된다. 취소 시 false */
     import: () => Promise<boolean>
+  }
+  deeplink: {
+    /** 형제 앱 연동(D-14) — WHENCOMMAND가 whenmail://<명령>으로 부른 것. 반환값은 구독 해제 함수 */
+    onLink: (cb: (link: DeepLink) => void) => () => void
   }
 }

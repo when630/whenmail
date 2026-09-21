@@ -24,6 +24,7 @@
 - **템플릿 시퀀스** — 인사 → 1주 후 자료 → 2주 후 미팅 제안처럼 템플릿을 순서로 묶는다. 시작하면 1단계가 할 일로 뜨고 초안을 만들면 다음 단계가 예약된다. **자동으로 보내지 않는다**
 - **활동** — 초안·메모·명함·병합 기록을 한 타임라인으로. 종류 필터와 검색
 - **Ctrl+K 커맨드 팔레트** — 사람 검색 → 템플릿 선택 → 초안까지 키보드만으로
+- **WHENCOMMAND에서** — [WHENCOMMAND](https://github.com/when630/whencommand)(시리즈의 입력줄)에서 `사람 검색 김부장` `Enter`면 이 앱이 그 검색어로 팔레트를 연 채 뜹니다. `연락 활동` · `연락처 열기`도 거기서 — `whenmail://` 딥링크([when-protocol](https://github.com/when630/when-protocol)). WHENCOMMAND가 없으면 아무 차이도 없습니다
 - zip 백업/복원, 자동 업데이트
 
 ## 연동 앱 등록 (Microsoft 365 · Gmail을 쓸 때만)

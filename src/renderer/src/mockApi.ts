@@ -898,6 +898,9 @@ export function installMockApiIfNeeded(): void {
     backup: {
       export: async () => 'C:/mock/whenmail-backup.zip',
       import: async () => false
+    },
+    deeplink: {
+      onLink: () => () => {}
     }
   }
 

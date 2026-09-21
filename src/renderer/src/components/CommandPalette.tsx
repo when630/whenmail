@@ -23,6 +23,8 @@ interface Props {
   onCompose: (person: Person, templateId: number) => void
   onNewPerson: () => void
   onImport: () => void
+  /** 열릴 때 미리 넣을 검색어 — WHENCOMMAND의 `사람 검색 김부장`(D-14) */
+  initialQuery?: string
 }
 
 interface ActionItem {
@@ -53,9 +55,10 @@ export default function CommandPalette({
   onNavigate,
   onCompose,
   onNewPerson,
-  onImport
+  onImport,
+  initialQuery
 }: Props): React.JSX.Element {
-  const [query, setQuery] = useState('')
+  const [query, setQuery] = useState(initialQuery ?? '')
   const [people, setPeople] = useState<Person[]>([])
   const [templates, setTemplates] = useState<EmailTemplate[] | null>(null)
   const [picked, setPicked] = useState<Person | null>(null)

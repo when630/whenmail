@@ -40,6 +40,7 @@ import type {
   UpdateState
 } from '../shared/types'
 import type { WhenmailApi } from '../shared/api'
+import type { DeepLink } from '../shared/deeplink'
 
 const api: WhenmailApi = {
   people: {
@@ -198,6 +199,13 @@ const api: WhenmailApi = {
   backup: {
     export: (): Promise<string | null> => ipcRenderer.invoke('backup:export'),
     import: (): Promise<boolean> => ipcRenderer.invoke('backup:import')
+  },
+  deeplink: {
+    onLink: (cb: (link: DeepLink) => void): (() => void) => {
+      const listener = (_e: Electron.IpcRendererEvent, link: DeepLink): void => cb(link)
+      ipcRenderer.on('deeplink', listener)
+      return () => ipcRenderer.removeListener('deeplink', listener)
+    }
   }
 }
 

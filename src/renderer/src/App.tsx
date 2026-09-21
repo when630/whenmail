@@ -78,6 +78,8 @@ export default function App(): React.JSX.Element {
     templateId?: number | null
     followUpId?: number | null
   } | null>(null)
+  const [paletteQuery, setPaletteQuery] = useState('') // 딥링크가 넘긴 검색어(D-14). Ctrl+K로 열 때는 비어 있다
+  const [paletteKey, setPaletteKey] = useState(0)
   const [newPersonSignal, setNewPersonSignal] = useState(0)
   const [importSignal, setImportSignal] = useState(0)
   /** 알림에서 사람을 열 때 — 같은 사람을 다시 눌러도 열리도록 순번을 함께 올린다 */
@@ -120,6 +122,19 @@ export default function App(): React.JSX.Element {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
+  // 형제 앱 연동(D-14) — WHENCOMMAND가 whenmail://search?q= 로 부르면 팔레트를 그 검색어로 연다. 이미 열려 있으면 다시 만든다(key)
+  useEffect(() => {
+    return window.api.deeplink.onLink((link) => {
+      if (link.command === 'search') {
+        setPaletteQuery(link.args.q ?? '')
+        setPaletteKey((k) => k + 1)
+        setPaletteOpen(true)
+      } else if (link.command === 'activity') {
+        setView('activity')
+      }
+    })
   }, [])
 
   const toggleExpanded = (): void => {
@@ -278,7 +293,12 @@ export default function App(): React.JSX.Element {
       )}
       {paletteOpen && (
         <CommandPalette
-          onClose={() => setPaletteOpen(false)}
+          key={paletteKey}
+          initialQuery={paletteQuery}
+          onClose={() => {
+            setPaletteOpen(false)
+            setPaletteQuery('')
+          }}
           onNavigate={navigate}
           onCompose={(person, templateId) => setCompose({ people: [person], templateId })}
           onNewPerson={openNewPerson}
