@@ -9,6 +9,8 @@ import { registerIpcHandlers } from './ipc'
 import { initUpdater } from './updater'
 import { migrateLegacyData } from './migrate'
 import { registerSyncHandlers, syncOnStartup } from './sync'
+import { applyHotkey, releaseHotkey, setHotkeyAction } from './hotkey'
+import { getSettings } from './repo'
 import {
   APP_ID as LINK_ID,
   SCHEME,
@@ -74,6 +76,16 @@ function focusMain(): BrowserWindow {
   win.show()
   win.focus()
   return win
+}
+
+// 전역 단축키가 하는 일 — 창을 앞으로. 이미 앞에 있으면 내린다(최소화). 숨기지는 않는다 —
+// 트레이가 없는 앱이라 숨긴 창은 단축키 말고는 되찾을 길이 없다.
+function toggleMain(): void {
+  if (mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible() && mainWindow.isFocused()) {
+    mainWindow.minimize()
+    return
+  }
+  focusMain()
 }
 
 function handleDeepLink(raw: string): boolean {
@@ -155,6 +167,10 @@ app.whenReady().then(() => {
   syncOnStartup()
   writeManifest()
 
+  // 전역 단축키 — 조합은 설정(DB)에 있다. 못 잡아도 앱은 뜬다: 설정 화면이 그 사실을 빨갛게 적는다
+  setHotkeyAction(toggleMain)
+  applyHotkey(getSettings().hotkey)
+
   // 첫 실행의 argv(Windows)나 ready 전에 온 open-url(macOS)에 딥링크가 있으면 처리한다
   const first = fromArgv(process.argv) ?? pendingUrl
   pendingUrl = null
@@ -170,6 +186,8 @@ app.whenReady().then(() => {
 // Quit when all windows are closed, except on macOS. There, it's common
 // for applications and their menu bar to stay active until the user quits
 // explicitly with Cmd + Q.
+app.on('will-quit', () => releaseHotkey())
+
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit()

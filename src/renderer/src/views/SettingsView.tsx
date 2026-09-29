@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   Archive,
   Bell,
@@ -6,6 +6,7 @@ import {
   Database,
   DownloadCloud,
   FolderOpen,
+  Keyboard,
   KeyRound,
   Loader2,
   MailCheck,
@@ -30,6 +31,7 @@ import type {
 import { ACCOUNT_KIND_LABEL } from '../../../shared/accounts'
 import { useDialog } from '../components/dialogs'
 import { getThemePref, setThemePref, type ThemePref } from '../theme'
+import { hotkeyLabel, readAccel } from '../../../shared/hotkey'
 import AccountModal from './AccountModal'
 
 const THEME_OPTIONS: { value: ThemePref; label: string }[] = [
@@ -55,8 +57,13 @@ const EMPTY_SETTINGS: AppSettings = {
   awaitingReplyDays: 7,
   syncOnStartup: true,
   followUpDays: 7,
-  followUpDefaultOn: true
+  followUpDefaultOn: true,
+  hotkey: '',
+  hotkeyOk: true
 }
+
+// 맥은 수식키를 기호로 읽는다(⌃⌥E). 브라우저 모드(mockApi)에서는 electron이 없다
+const IS_MAC = window.electron?.process?.platform === 'darwin'
 
 const AZURE_URL =
   'https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade'
@@ -87,6 +94,10 @@ export default function SettingsView({
   const [fuDays, setFuDays] = useState(7)
   const [fuOn, setFuOn] = useState(true)
   const [savingSync, setSavingSync] = useState(false)
+  // 전역 단축키 — 칸을 누르고 조합을 실제로 누르면 잡힌다. 글자로 치라는 건 Accelerator 문법을 외우라는 말이다
+  const [capturing, setCapturing] = useState(false)
+  const [pendingMods, setPendingMods] = useState<string[]>([])
+  const hotkeyBtn = useRef<HTMLButtonElement>(null)
   const { confirm, toast } = useDialog()
 
   const reloadAccounts = useCallback(async () => {
@@ -180,6 +191,62 @@ export default function SettingsView({
       setSavingSync(false)
     }
   }
+
+  // 조합을 바꾸면 main이 **등록까지 해 보고** 성공했을 때만 저장한다. 실패는 오류로 돌아와 토스트에 적힌다.
+  const saveHotkey = async (accel: string): Promise<void> => {
+    setCapturing(false)
+    setPendingMods([])
+    if (accel === settings.hotkey) return
+    try {
+      const saved = await window.api.settings.save({ ...settings, hotkey: accel })
+      setSettings(saved)
+      toast(accel ? `단축키를 ${hotkeyLabel(accel, IS_MAC)} 로 바꿨습니다` : '단축키를 껐습니다')
+    } catch (e) {
+      toast(e instanceof Error ? e.message : String(e), 'error')
+    }
+  }
+
+  const onHotkeyKey = (e: React.KeyboardEvent<HTMLButtonElement>): void => {
+    if (!capturing) {
+      // 잡기 전에는 Enter·Space가 버튼 클릭(=잡기 시작)이다 — 기본 동작에 맡긴다
+      return
+    }
+    e.preventDefault()
+    e.stopPropagation()
+    if (e.key === 'Escape') {
+      setCapturing(false)
+      setPendingMods([])
+      return
+    }
+    // 수식키 없는 Backspace는 비움 — 단축키를 안 쓴다
+    if (e.code === 'Backspace' && !e.ctrlKey && !e.altKey && !e.shiftKey && !e.metaKey) {
+      void saveHotkey('')
+      return
+    }
+    const r = readAccel(e, IS_MAC)
+    if ('pending' in r) setPendingMods(r.pending)
+    else if ('reject' in r) toast('Ctrl·Alt·Shift 중 하나는 함께 누르세요', 'error')
+    else void saveHotkey(r.accel)
+  }
+
+  const onHotkeyKeyUp = (e: React.KeyboardEvent<HTMLButtonElement>): void => {
+    if (!capturing) return
+    // 수식키를 뗐을 때 미리보기를 되돌린다
+    const mods: string[] = []
+    if (e.ctrlKey) mods.push('Control')
+    if (e.altKey) mods.push('Alt')
+    if (e.shiftKey) mods.push('Shift')
+    if (e.metaKey) mods.push(IS_MAC ? 'Command' : 'Super')
+    setPendingMods(mods)
+  }
+
+  const hotkeyText = capturing
+    ? pendingMods.length
+      ? `${hotkeyLabel(pendingMods.join('+'), IS_MAC)} + …`
+      : '누르세요… (Esc 취소 · Backspace 끄기)'
+    : settings.hotkey
+      ? hotkeyLabel(settings.hotkey, IS_MAC)
+      : '없음'
 
   const changeTheme = (pref: ThemePref): void => {
     setThemePref(pref)
@@ -542,6 +609,50 @@ export default function SettingsView({
           {sync?.phase === 'error' && <span className="field-error">{sync.message}</span>}
           {(!sync || sync.phase === 'idle') && '아직 확인하지 않았습니다'}
         </p>
+      </section>
+
+      <section className="settings-section">
+        <h2>
+          <Keyboard size={16} />
+          단축키
+        </h2>
+        <p className="muted">
+          어느 앱에 있든 이 조합을 누르면 whenmail 창이 앞으로 옵니다. 이미 앞에 있으면 내려갑니다.
+          앱이 켜져 있는 동안만 동작합니다. 칸을 누르고 원하는 조합을 그대로 누르세요. 창 안에서는{' '}
+          <kbd>Ctrl+K</kbd>가 커맨드 팔레트입니다.
+        </p>
+        <div className="hotkey-row">
+          <button
+            ref={hotkeyBtn}
+            type="button"
+            className={`btn hotkey-btn${capturing ? ' capturing' : ''}${settings.hotkey && !settings.hotkeyOk ? ' bad' : ''}`}
+            aria-label="전역 단축키"
+            onClick={() => {
+              setCapturing(true)
+              setPendingMods([])
+              hotkeyBtn.current?.focus()
+            }}
+            onKeyDown={onHotkeyKey}
+            onKeyUp={onHotkeyKeyUp}
+            onBlur={() => {
+              setCapturing(false)
+              setPendingMods([])
+            }}
+          >
+            {hotkeyText}
+          </button>
+          {settings.hotkey && !settings.hotkeyOk && (
+            <span className="field-error">
+              <CircleAlert size={14} /> 등록 실패 — 다른 앱이 이 조합을 쓰고 있습니다. 눌러서
+              바꾸세요
+            </span>
+          )}
+          {!capturing && settings.hotkey && settings.hotkeyOk && (
+            <button type="button" className="link-btn" onClick={() => void saveHotkey('')}>
+              끄기
+            </button>
+          )}
+        </div>
       </section>
 
       <section className="settings-section">

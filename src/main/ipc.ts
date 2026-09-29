@@ -28,6 +28,8 @@ import { imageToDataUrl, pickAndScanCard } from './ocr'
 import { exportBackup, importBackup } from './backup'
 import { existingAttachments, pickAttachments } from './attachments'
 import { exportPeople } from './exporter'
+import { applyHotkey, hotkeyState } from './hotkey'
+import { hotkeyLabel } from '../shared/hotkey'
 import { createDraftForAccount, testImapConnection, type DraftMessage } from './adapters'
 import { connectOAuth, pendingOAuthKey } from './oauth'
 import { secretKeys } from './credentials'
@@ -345,8 +347,24 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle('system:version', () => app.getVersion())
   ipcMain.handle('system:outlookDetected', () => detectOutlookMode())
-  ipcMain.handle('settings:get', () => repo.getSettings())
-  ipcMain.handle('settings:save', (_e, input: AppSettings) => repo.saveSettings(input))
+  ipcMain.handle('settings:get', () => ({ ...repo.getSettings(), ...hotkeyState() }))
+  // 단축키는 **등록까지 해 보고 성공했을 때만** 저장한다. 실패하면 이전 조합으로 되돌리고 나머지 설정은
+  // 그대로 저장한 채 오류를 던진다 — 저장해 두면 다음 실행에서도 안 잡히는 조합으로 조용히 시작한다.
+  ipcMain.handle('settings:save', (_e, input: AppSettings) => {
+    const saved = repo.saveSettings(input)
+    const next = String(input.hotkey ?? '').trim()
+    const prev = hotkeyState().hotkey
+    if (next !== prev) {
+      if (applyHotkey(next)) repo.saveHotkey(next)
+      else {
+        applyHotkey(prev)
+        throw new Error(
+          `단축키 ${hotkeyLabel(next, process.platform === 'darwin')} 를 등록하지 못했습니다 — 다른 앱이 쓰고 있거나 잘못된 조합입니다. 이전 조합을 유지합니다`
+        )
+      }
+    }
+    return { ...saved, ...hotkeyState() }
+  })
   ipcMain.handle('system:openDataFolder', () => shell.openPath(app.getPath('userData')))
   ipcMain.handle('system:showInFolder', (_e, filePath: string) =>
     shell.showItemInFolder(path.resolve(filePath))

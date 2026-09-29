@@ -1,4 +1,5 @@
 import { getDb } from './db'
+import { DEFAULT_HOTKEY } from './hotkey'
 import { pruneAttachments } from './attachments'
 import {
   deleteAccountSecrets,
@@ -1716,8 +1717,20 @@ export function getSettings(): AppSettings {
     awaitingReplyDays: Number.isFinite(days) && days > 0 ? days : 7,
     syncOnStartup: map.get('sync_on_startup') !== '0',
     followUpDays: Number(map.get('follow_up_days')) > 0 ? Number(map.get('follow_up_days')) : 7,
-    followUpDefaultOn: map.get('follow_up_default_on') === '1'
+    followUpDefaultOn: map.get('follow_up_default_on') === '1',
+    // 행이 없으면 기본 조합, 빈 문자열로 저장돼 있으면 "안 쓴다"
+    hotkey: map.has('global_hotkey') ? (map.get('global_hotkey') ?? '') : DEFAULT_HOTKEY,
+    hotkeyOk: true // 등록 상태는 DB가 모른다 — ipc가 hotkey 모듈의 값으로 덮어쓴다
   }
+}
+
+/** 단축키만 저장한다. 등록에 성공했을 때만 부른다 — 안 잡히는 조합을 저장해 두면 다음 실행에서도 조용히 실패한다. */
+export function saveHotkey(accel: string): void {
+  getDb()
+    .prepare(
+      'INSERT INTO setting (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value'
+    )
+    .run('global_hotkey', String(accel ?? '').trim())
 }
 
 export function saveSettings(input: AppSettings): AppSettings {

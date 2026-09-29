@@ -1755,6 +1755,32 @@ kbd {
   color: var(--muted);
 }
 
+/* 전역 단축키 칸 — 누르면 잡기 모드(점선), 등록에 실패한 조합은 빨갛게 */
+.hotkey-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.hotkey-btn {
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  min-width: 160px;
+  justify-content: center;
+}
+.hotkey-btn.capturing {
+  border-style: dashed;
+  color: var(--primary);
+}
+.hotkey-btn.bad {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+.hotkey-row .field-error {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
 .settings-section p {
   margin: 0 0 10px;
 }

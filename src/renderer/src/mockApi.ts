@@ -219,7 +219,9 @@ export function installMockApiIfNeeded(): void {
     awaitingReplyDays: 7,
     syncOnStartup: true,
     followUpDays: 7,
-    followUpDefaultOn: true
+    followUpDefaultOn: true,
+    hotkey: 'Control+Alt+E',
+    hotkeyOk: true
   }
   const accountBase = {
     signature_enabled: true,
@@ -881,6 +883,8 @@ export function installMockApiIfNeeded(): void {
           syncOnStartup: input.syncOnStartup,
           followUpDays: input.followUpDays,
           followUpDefaultOn: input.followUpDefaultOn,
+          hotkey: input.hotkey,
+          hotkeyOk: true,
           hasGoogleClientSecret:
             input.googleClientSecret === 'CLEAR'
               ? false

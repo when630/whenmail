@@ -497,6 +497,10 @@ export interface AppSettings {
   followUpDays: number
   /** 초안을 만들 때 후속 리마인더를 기본으로 켜 둘지 */
   followUpDefaultOn: boolean
+  /** 창을 앞으로 가져오는 전역 단축키(Electron Accelerator 문법). 빈 문자열이면 안 쓴다 */
+  hotkey: string
+  /** 그 조합이 실제로 잡혔는지(읽기 전용). 다른 앱이 쥐고 있으면 false — 설정 화면이 빨갛게 적는다 */
+  hotkeyOk: boolean
 }
 
 /** 초안 생성 시 모든 수신자에게 공통 적용되는 옵션 */
