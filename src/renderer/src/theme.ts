@@ -31,6 +31,7 @@ export function setThemePref(pref: ThemePref): void {
 
 /** 앱 시작 시 저장된 테마 적용 + OS 테마 변화 추적(시스템 모드일 때) */
 export function initTheme(): void {
+  if (document.documentElement.dataset.skin) return
   apply(getThemePref())
   window
     .matchMedia('(prefers-color-scheme: dark)')
