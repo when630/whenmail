@@ -30,8 +30,15 @@ import type {
 } from '../../../shared/types'
 import { ACCOUNT_KIND_LABEL } from '../../../shared/accounts'
 import { useDialog } from '../components/dialogs'
+import { getThemePref, setThemePref, type ThemePref } from '../theme'
 import { hotkeyLabel, readAccel } from '../../../shared/hotkey'
 import AccountModal from './AccountModal'
+
+const THEME_OPTIONS: { value: ThemePref; label: string }[] = [
+  { value: 'system', label: '시스템' },
+  { value: 'light', label: '라이트' },
+  { value: 'dark', label: '다크' }
+]
 
 const UPDATE_LABEL: Record<UpdateState['status'], string> = {
   idle: '확인 전',
@@ -71,6 +78,7 @@ export default function SettingsView({
   const [busy, setBusy] = useState<'export' | 'import' | null>(null)
   const [version, setVersion] = useState('')
   const [update, setUpdate] = useState<UpdateState>({ status: 'idle' })
+  const [theme, setTheme] = useState<ThemePref>(getThemePref)
   const [accounts, setAccounts] = useState<Account[] | null>(null)
   const [detected, setDetected] = useState<OutlookAdapter | null>(null)
   const [settings, setSettings] = useState<AppSettings>(EMPTY_SETTINGS)
@@ -240,6 +248,10 @@ export default function SettingsView({
       ? hotkeyLabel(settings.hotkey, IS_MAC)
       : '없음'
 
+  const changeTheme = (pref: ThemePref): void => {
+    setThemePref(pref)
+    setTheme(pref)
+  }
 
   const removeAccount = async (a: Account): Promise<void> => {
     const ok = await confirm({
@@ -648,7 +660,20 @@ export default function SettingsView({
           <Palette size={16} />
           화면
         </h2>
-        <div data-when-appearance="" />
+        <p className="muted">테마를 선택합니다. 시스템은 Windows 설정을 따라갑니다.</p>
+        <div className="segment" role="radiogroup" aria-label="테마">
+          {THEME_OPTIONS.map((opt) => (
+            <button
+              key={opt.value}
+              role="radio"
+              aria-checked={theme === opt.value}
+              className={theme === opt.value ? 'active' : ''}
+              onClick={() => changeTheme(opt.value)}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
       </section>
 
       <section className="settings-section">

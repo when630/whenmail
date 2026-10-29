@@ -222,15 +222,3 @@ if (process.contextIsolated) {
   // @ts-ignore (define in dts)
   window.api = api
 }
-
-const appearance = {
-  initial: ipcRenderer.sendSync('appearance:get'),
-  set: (patch: unknown) => ipcRenderer.invoke('appearance:set', patch),
-  onChange: (callback: (state: unknown) => void) => {
-    const listener = (_event: Electron.IpcRendererEvent, state: unknown): void => callback(state)
-    ipcRenderer.on('appearance:changed', listener)
-    return () => ipcRenderer.removeListener('appearance:changed', listener)
-  }
-}
-if (process.contextIsolated) contextBridge.exposeInMainWorld('whenAppearance', appearance)
-else Object.assign(window, { whenAppearance: appearance })

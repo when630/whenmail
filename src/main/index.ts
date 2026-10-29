@@ -1,5 +1,3 @@
-import { registerAppearance } from './appearance'
-registerAppearance()
 import { app, shell, BrowserWindow } from 'electron'
 import { join } from 'path'
 import fs from 'node:fs'
